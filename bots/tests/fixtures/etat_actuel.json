@@ -1,0 +1,409 @@
+{
+  "ante_num": 1,
+  "won": false,
+  "deck": "RED",
+  "stake": "WHITE",
+  "round": {
+    "hands_left": 0,
+    "reroll_cost": 5,
+    "chips": 0,
+    "discards_left": 0,
+    "hands_played": 0,
+    "discards_used": 0
+  },
+  "hands": {
+    "Flush House": {
+      "order": 2,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "D_7",
+          true
+        ],
+        [
+          "D_7",
+          true
+        ],
+        [
+          "D_7",
+          true
+        ],
+        [
+          "D_4",
+          true
+        ],
+        [
+          "D_4",
+          true
+        ]
+      ],
+      "chips": 140,
+      "level": 1,
+      "mult": 14
+    },
+    "Full House": {
+      "order": 6,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "H_K",
+          true
+        ],
+        [
+          "C_K",
+          true
+        ],
+        [
+          "D_K",
+          true
+        ],
+        [
+          "S_2",
+          true
+        ],
+        [
+          "D_2",
+          true
+        ]
+      ],
+      "chips": 40,
+      "level": 1,
+      "mult": 4
+    },
+    "Flush": {
+      "order": 7,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "H_A",
+          true
+        ],
+        [
+          "H_K",
+          true
+        ],
+        [
+          "H_T",
+          true
+        ],
+        [
+          "H_5",
+          true
+        ],
+        [
+          "H_4",
+          true
+        ]
+      ],
+      "chips": 35,
+      "level": 1,
+      "mult": 4
+    },
+    "Pair": {
+      "order": 11,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_K",
+          false
+        ],
+        [
+          "S_9",
+          true
+        ],
+        [
+          "D_9",
+          true
+        ],
+        [
+          "H_6",
+          false
+        ],
+        [
+          "D_3",
+          false
+        ]
+      ],
+      "chips": 10,
+      "level": 1,
+      "mult": 2
+    },
+    "Four of a Kind": {
+      "order": 5,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_J",
+          true
+        ],
+        [
+          "H_J",
+          true
+        ],
+        [
+          "C_J",
+          true
+        ],
+        [
+          "D_J",
+          true
+        ],
+        [
+          "C_3",
+          false
+        ]
+      ],
+      "chips": 60,
+      "level": 1,
+      "mult": 7
+    },
+    "Straight Flush": {
+      "order": 4,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_Q",
+          true
+        ],
+        [
+          "S_J",
+          true
+        ],
+        [
+          "S_T",
+          true
+        ],
+        [
+          "S_9",
+          true
+        ],
+        [
+          "S_8",
+          true
+        ]
+      ],
+      "chips": 100,
+      "level": 1,
+      "mult": 8
+    },
+    "Straight": {
+      "order": 8,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "D_J",
+          true
+        ],
+        [
+          "C_T",
+          true
+        ],
+        [
+          "C_9",
+          true
+        ],
+        [
+          "S_8",
+          true
+        ],
+        [
+          "H_7",
+          true
+        ]
+      ],
+      "chips": 30,
+      "level": 1,
+      "mult": 4
+    },
+    "Three of a Kind": {
+      "order": 9,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_T",
+          true
+        ],
+        [
+          "C_T",
+          true
+        ],
+        [
+          "D_T",
+          true
+        ],
+        [
+          "H_6",
+          false
+        ],
+        [
+          "D_5",
+          false
+        ]
+      ],
+      "chips": 30,
+      "level": 1,
+      "mult": 3
+    },
+    "Flush Five": {
+      "order": 1,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_A",
+          true
+        ],
+        [
+          "S_A",
+          true
+        ],
+        [
+          "S_A",
+          true
+        ],
+        [
+          "S_A",
+          true
+        ],
+        [
+          "S_A",
+          true
+        ]
+      ],
+      "chips": 160,
+      "level": 1,
+      "mult": 16
+    },
+    "Two Pair": {
+      "order": 10,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "H_A",
+          true
+        ],
+        [
+          "D_A",
+          true
+        ],
+        [
+          "C_Q",
+          false
+        ],
+        [
+          "H_4",
+          true
+        ],
+        [
+          "C_4",
+          true
+        ]
+      ],
+      "chips": 20,
+      "level": 1,
+      "mult": 2
+    },
+    "Five of a Kind": {
+      "order": 3,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_A",
+          true
+        ],
+        [
+          "H_A",
+          true
+        ],
+        [
+          "H_A",
+          true
+        ],
+        [
+          "C_A",
+          true
+        ],
+        [
+          "D_A",
+          true
+        ]
+      ],
+      "chips": 120,
+      "level": 1,
+      "mult": 12
+    },
+    "High Card": {
+      "order": 12,
+      "played": 0,
+      "played_this_round": 0,
+      "example": [
+        [
+          "S_A",
+          true
+        ],
+        [
+          "D_Q",
+          false
+        ],
+        [
+          "D_9",
+          false
+        ],
+        [
+          "C_4",
+          false
+        ],
+        [
+          "D_3",
+          false
+        ]
+      ],
+      "chips": 5,
+      "level": 1,
+      "mult": 1
+    }
+  },
+  "money": 0,
+  "state": "MENU",
+  "round_num": 0,
+  "used_vouchers": [],
+  "blinds": {
+    "boss": {
+      "tag_effect": "",
+      "status": "UPCOMING",
+      "name": "Boss Blind",
+      "type": "BOSS",
+      "tag_name": "",
+      "effect": "",
+      "score": 600
+    },
+    "small": {
+      "tag_effect": "",
+      "status": "SELECT",
+      "name": "Small Blind",
+      "type": "SMALL",
+      "tag_name": "",
+      "effect": "",
+      "score": 300
+    },
+    "big": {
+      "tag_effect": "",
+      "status": "UPCOMING",
+      "name": "Big Blind",
+      "type": "BIG",
+      "tag_name": "",
+      "effect": "",
+      "score": 450
+    }
+  }
+}

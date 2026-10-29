@@ -1,0 +1,84 @@
+[project]
+name = "balatrobot"
+version = "1.5.2"
+description = "API for developing Balatro bots"
+readme = "README.md"
+authors = [
+  { name = "S1M0N38", email = "bertolottosimone@gmail.com" },
+  { name = "stirby" },
+  { name = "giewev" },
+  { name = "besteon" },
+  { name = "phughesion" },
+]
+requires-python = ">=3.13"
+dependencies = [
+    "gymnasium>=1.4.0",
+    "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
+    "sb3-contrib>=2.9.2",
+    "stable-baselines3>=2.9.2",
+    "tensorboard>=2.21.0",
+    "torch>=2.15.0",
+    "typer>=0.15",
+]
+classifiers = [
+  "Framework :: Pytest",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.scripts]
+balatrobot = "balatrobot.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/coder/balatrobot"
+Issues = "https://github.com/coder/balatrobot/issues"
+Repository = "https://github.com/coder/balatrobot"
+Changelog = "https://github.com/coder/balatrobot/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+lint.extend-select = ["I"]
+lint.task-tags = ["FIX", "TODO", "HACK", "WARN", "PERF", "NOTE", "TEST"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+addopts = "--dist loadscope"
+markers = [
+  "dev: marks tests that are currently developed",
+  "integration: marks integration tests that actually start Balatro (deselect with '-m \"not integration\"')",
+]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "pep621"
+
+[dependency-groups]
+test = [
+  "pytest>=9.0.2",
+  "pytest-asyncio>=1.3.0",
+  "pytest-rerunfailures>=16.1",
+  "pytest-xdist[psutil]>=3.8.0",
+  "tqdm>=4.67.1",
+]
+dev = [
+  "commitizen>=4.11.0",
+  "mdformat>=0.7.22,<0.8.0",
+  "mdformat-footnote>=0.1.2",
+  "mdformat-frontmatter>=2.0.8",
+  "mdformat-gfm>=1.0.0",
+  "mdformat-gfm-alerts>=2.0.0",
+  "mdformat-mkdocs>=5.1.1",
+  "mdformat-simple-breaks>=0.0.1",
+  "mike>=2.2.0",
+  "mkdocs>=1.6.1",
+  "mkdocs-llmstxt>=0.5.0",
+  "mkdocs-material>=9.7.1",
+  "ruff>=0.14.10",
+  "ty>=0.0.9",
+]

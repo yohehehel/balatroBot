@@ -1,0 +1,67 @@
+{
+  "state": "BLIND_SELECT",
+  "round_num": 2,
+  "ante_num": 1,
+  "money": 8,
+  "deck": "RED",
+  "stake": "WHITE",
+  "seed": "ABCDEF",
+  "won": false,
+  "used_vouchers": {},
+  "hands": {},
+  "round": {
+    "hands_left": 4,
+    "hands_played": 0,
+    "discards_left": 4,
+    "discards_used": 0,
+    "reroll_cost": 5,
+    "chips": 0
+  },
+  "blinds": {
+    "small": {
+      "type": "SMALL",
+      "status": "DEFEATED",
+      "name": "Small Blind",
+      "effect": "No special effect",
+      "score": 300
+    },
+    "big": {
+      "type": "BIG",
+      "status": "SELECT",
+      "name": "Big Blind",
+      "effect": "No special effect",
+      "score": 450
+    },
+    "boss": {
+      "type": "BOSS",
+      "status": "UPCOMING",
+      "name": "The Psychic",
+      "effect": "Must play 5 cards",
+      "score": 600
+    }
+  },
+  "jokers": {
+    "count": 1,
+    "limit": 5,
+    "highlighted_limit": 0,
+    "cards": [
+      {
+        "id": 1,
+        "key": "j_joker",
+        "set": "JOKER",
+        "label": "Joker",
+        "value": { "effect": "+4 Mult" },
+        "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false },
+        "state": { "debuff": false, "hidden": false, "highlight": false },
+        "cost": { "sell": 1, "buy": 0 }
+      }
+    ]
+  },
+  "consumables": { "count": 0, "limit": 2, "highlighted_limit": 0, "cards": [] },
+  "cards": { "count": 52, "limit": 52, "highlighted_limit": 0, "cards": [] },
+  "hand": { "count": 0, "limit": 8, "highlighted_limit": 5, "cards": [] },
+  "shop": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "vouchers": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "packs": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "pack": null
+}

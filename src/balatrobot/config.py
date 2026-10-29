@@ -1,0 +1,136 @@
+"""Configuration dataclass for BalatroBot launcher."""
+
+import os
+from dataclasses import dataclass
+from typing import Any, Self
+
+# Mapping: config field -> env var
+ENV_MAP: dict[str, str] = {
+    "host": "BALATROBOT_HOST",
+    "port": "BALATROBOT_PORT",
+    "fast": "BALATROBOT_FAST",
+    "headless": "BALATROBOT_HEADLESS",
+    "no_save": "BALATROBOT_NO_SAVE",
+    "render_on_api": "BALATROBOT_RENDER_ON_API",
+    "audio": "BALATROBOT_AUDIO",
+    "debug": "BALATROBOT_DEBUG",
+    "no_shaders": "BALATROBOT_NO_SHADERS",
+    "fps_cap": "BALATROBOT_FPS_CAP",
+    "gamespeed": "BALATROBOT_GAMESPEED",
+    "animation_fps": "BALATROBOT_ANIMATION_FPS",
+    "no_reduced_motion": "BALATROBOT_NO_REDUCED_MOTION",
+    "pixel_art_smoothing": "BALATROBOT_PIXEL_ART_SMOOTHING",
+    "balatro_path": "BALATROBOT_BALATRO_PATH",
+    "lovely_path": "BALATROBOT_LOVELY_PATH",
+    "love_path": "BALATROBOT_LOVE_PATH",
+    "platform": "BALATROBOT_PLATFORM",
+    "logs_path": "BALATROBOT_LOGS_PATH",
+}
+
+BOOL_FIELDS = frozenset(
+    {
+        "fast",
+        "headless",
+        "no_save",
+        "render_on_api",
+        "audio",
+        "debug",
+        "no_shaders",
+        "no_reduced_motion",
+        "pixel_art_smoothing",
+    }
+)
+INT_FIELDS = frozenset({"port", "fps_cap", "gamespeed", "animation_fps"})
+
+
+def _parse_env_value(field: str, value: str) -> str | int | bool:
+    """Convert env var string to proper type. Raises ValueError on invalid int."""
+    if field in BOOL_FIELDS:
+        return value in ("1", "true")
+    if field in INT_FIELDS:
+        return int(value)  # Raises ValueError if invalid
+    return value
+
+
+@dataclass
+class Config:
+    """Configuration for BalatroBot launcher."""
+
+    # HTTP
+    host: str = "127.0.0.1"
+    port: int = 12346
+
+    # Balatro
+    fast: bool = False
+    headless: bool = False
+    no_save: bool = False
+    render_on_api: bool = False
+    audio: bool = False
+    debug: bool = False
+    no_shaders: bool = False
+    fps_cap: int = 60
+    gamespeed: int = 4
+    animation_fps: int = 10
+    no_reduced_motion: bool = False
+    pixel_art_smoothing: bool = False
+
+    # Launcher
+    balatro_path: str | None = None
+    lovely_path: str | None = None
+    love_path: str | None = None
+
+    # Instance
+    platform: str | None = None
+    logs_path: str = "logs"
+
+    @classmethod
+    def from_args(cls, args) -> Self:
+        """Create Config from CLI args with env var fallback."""
+        kwargs: dict[str, Any] = {}
+
+        for field, env_var in ENV_MAP.items():
+            cli_val = getattr(args, field, None)
+            if cli_val is not None:
+                kwargs[field] = cli_val
+            elif (env_val := os.environ.get(env_var)) is not None:
+                kwargs[field] = _parse_env_value(field, env_val)
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_env(cls) -> Self:
+        """Create Config from environment variables only."""
+        kwargs: dict[str, Any] = {}
+
+        for field, env_var in ENV_MAP.items():
+            if (env_val := os.environ.get(env_var)) is not None:
+                kwargs[field] = _parse_env_value(field, env_val)
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_kwargs(cls, **kw: Any) -> Self:
+        """Create Config from keyword arguments with env var fallback."""
+        kwargs: dict[str, Any] = {}
+
+        for field, env_var in ENV_MAP.items():
+            if kw.get(field) is not None:
+                kwargs[field] = kw[field]
+            elif (env_val := os.environ.get(env_var)) is not None:
+                kwargs[field] = _parse_env_value(field, env_val)
+
+        return cls(**kwargs)
+
+    def to_env(self) -> dict[str, str]:
+        """Convert config to environment variables dict."""
+        env: dict[str, str] = {}
+        for field, env_var in ENV_MAP.items():
+            value = getattr(self, field)
+            if value is None:
+                continue
+            if field in BOOL_FIELDS:
+                if value:
+                    env[env_var] = "1"
+            else:
+                env[env_var] = str(value)
+        return env

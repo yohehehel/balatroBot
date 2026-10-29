@@ -1,0 +1,22 @@
+{
+  "state": "MENU",
+  "round_num": 0,
+  "ante_num": 0,
+  "money": 0,
+  "deck": "",
+  "stake": "",
+  "seed": "",
+  "won": false,
+  "used_vouchers": {},
+  "hands": {},
+  "round": null,
+  "blinds": {},
+  "jokers": null,
+  "consumables": null,
+  "cards": null,
+  "hand": null,
+  "shop": null,
+  "vouchers": null,
+  "packs": null,
+  "pack": null
+}

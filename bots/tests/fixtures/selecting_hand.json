@@ -1,0 +1,56 @@
+{
+  "state": "SELECTING_HAND",
+  "round_num": 1,
+  "ante_num": 1,
+  "money": 4,
+  "deck": "RED",
+  "stake": "WHITE",
+  "seed": "ABCDEF",
+  "won": false,
+  "used_vouchers": {},
+  "hands": {
+    "Pair": { "order": 11, "level": 1, "chips": 10, "mult": 2, "played": 0, "played_this_round": 0 },
+    "High Card": { "order": 12, "level": 1, "chips": 5, "mult": 1, "played": 0, "played_this_round": 0 }
+  },
+  "round": {
+    "hands_left": 4,
+    "hands_played": 0,
+    "discards_left": 4,
+    "discards_used": 0,
+    "reroll_cost": 5,
+    "chips": 0
+  },
+  "blinds": {
+    "small": {
+      "type": "SMALL",
+      "status": "CURRENT",
+      "name": "Small Blind",
+      "effect": "No special effect",
+      "score": 300
+    },
+    "big": { "type": "BIG", "status": "UPCOMING", "name": "Big Blind", "effect": "No special effect", "score": 450 },
+    "boss": { "type": "BOSS", "status": "UPCOMING", "name": "The Hook", "effect": "Discards 2 random cards per hand played", "score": 600 }
+  },
+  "jokers": { "count": 0, "limit": 5, "highlighted_limit": 0, "cards": [] },
+  "consumables": { "count": 0, "limit": 2, "highlighted_limit": 0, "cards": [] },
+  "cards": { "count": 44, "limit": 52, "highlighted_limit": 0, "cards": [] },
+  "hand": {
+    "count": 8,
+    "limit": 8,
+    "highlighted_limit": 5,
+    "cards": [
+      { "id": 1, "key": "H_A", "set": "DEFAULT", "label": "Ace of Hearts",    "value": { "suit": "H", "rank": "A" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 2, "key": "S_K", "set": "DEFAULT", "label": "King of Spades",   "value": { "suit": "S", "rank": "K" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 3, "key": "D_Q", "set": "DEFAULT", "label": "Queen of Diamonds", "value": { "suit": "D", "rank": "Q" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 4, "key": "C_7", "set": "DEFAULT", "label": "Seven of Clubs",   "value": { "suit": "C", "rank": "7" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 5, "key": "H_5", "set": "DEFAULT", "label": "Five of Hearts",   "value": { "suit": "H", "rank": "5" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 6, "key": "S_3", "set": "DEFAULT", "label": "Three of Spades",  "value": { "suit": "S", "rank": "3" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 7, "key": "D_9", "set": "DEFAULT", "label": "Nine of Diamonds", "value": { "suit": "D", "rank": "9" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } },
+      { "id": 8, "key": "C_2", "set": "DEFAULT", "label": "Two of Clubs",     "value": { "suit": "C", "rank": "2" }, "modifier": { "seal": null, "edition": null, "enhancement": null, "eternal": false, "perishable": null, "rental": false }, "state": { "debuff": false, "hidden": false, "highlight": false }, "cost": { "sell": 1, "buy": 0 } }
+    ]
+  },
+  "shop": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "vouchers": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "packs": { "count": 0, "limit": 0, "highlighted_limit": 0, "cards": [] },
+  "pack": null
+}
