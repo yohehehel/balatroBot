@@ -47,7 +47,7 @@ echo -e "${GREEN}✓ System dependencies installed.${NC}\n"
 echo -e "${YELLOW}>>> [2/7] Installing Astral uv package manager...${NC}"
 if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.cargo/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 echo -e "${GREEN}✓ uv is available: $(uv --version)${NC}\n"
 
@@ -108,7 +108,7 @@ export BALATROBOT_PLATFORM=native
 export BALATROBOT_LOVE_PATH="\$(which love)"
 export BALATROBOT_LOVELY_PATH="/usr/local/lib/liblovely.so"
 export BALATROBOT_BALATRO_PATH="$SCRIPT_DIR/balatro_game"
-export PATH="\$HOME/.cargo/bin:\$PATH"
+export PATH="\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH"
 
 # Auto-start Xvfb if not running
 if ! pgrep -x "Xvfb" > /dev/null; then
