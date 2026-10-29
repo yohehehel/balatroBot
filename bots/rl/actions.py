@@ -218,14 +218,18 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                 continue
 
             card_set = (c.set or "").upper()
-            is_joker = card_set == "JOKER" or c.key.startswith("j_")
-            is_consumable = card_set in ("TAROT", "PLANET", "SPECTRAL") or c.key.startswith("c_")
+            c_key = c.key.lower()
+            is_joker = card_set == "JOKER" or c_key.startswith("j_")
+            is_consumable = card_set in ("TAROT", "PLANET", "SPECTRAL") or c_key.startswith("c_")
             is_negative = (c.modifier.edition or "").upper() in ("NEGATIVE", "E_NEGATIVE")
 
             if is_joker:
                 if len(jokers) < max_joker_slots or is_negative:
                     mask[ActionID.BUY_SHOP_CARD_0 + i] = True
             elif is_consumable:
+                # The Hermit buy guardrail: mask if net gain <= cost
+                if c_key == "c_hermit" and min(state.money - cost, 20) <= cost:
+                    continue
                 if len(consumables) < max_consumable_slots:
                     mask[ActionID.BUY_SHOP_CARD_0 + i] = True
             else:
@@ -267,14 +271,21 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                 if key.startswith("c_mercury") or key in (
                     "c_venus", "c_earth", "c_mars", "c_jupiter", "c_saturn",
                     "c_uranus", "c_neptune", "c_pluto", "c_planet_x", "c_ceres", "c_eris",
-                    "c_black_hole", "c_hermit", "c_temperance",
+                    "c_black_hole", "c_temperance",
                 ):
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
+                elif key == "c_hermit":
+                    # Mask Hermit usage if money <= $3 (wasteful doubling)
+                    if state.money > 3:
+                        mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
+                elif key in ("c_emperor", "c_high_priestess"):
+                    # Consumables generating up to 2 items: frees own slot first
+                    effective_free_slots = max_consumable_slots - (len(consumables) - 1)
+                    if effective_free_slots > 0:
+                        mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
                 elif key == "c_judgement" and len(jokers) < max_joker_slots:
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
                 elif key == "c_wheel_of_fortune" and any(not j.modifier.edition for j in jokers):
-                    mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
-                elif key in ("c_emperor", "c_high_priestess") and len(consumables) <= max_consumable_slots:
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
                 elif key == "c_fool":
                     if _can_use_fool(state):
@@ -328,6 +339,13 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                     mask[ActionID.SELECT_PACK_CARD_0 + i] = True
             elif key in ZERO_TARGET_CONSUMABLES:
                 # 0-target consumable used immediately
+                if key == "c_hermit" and state.money <= 3:
+                    continue
+                if key in ("c_emperor", "c_high_priestess"):
+                    # Taken from pack: consumes 1 slot per generated card directly
+                    effective_free_slots = max_consumable_slots - len(consumables)
+                    if effective_free_slots <= 0:
+                        continue
                 editionless_jokers = [j for j in jokers if not j.modifier.edition]
                 if key == "c_hex" and (len(editionless_jokers) == 0 or len([j for j in jokers if not j.modifier.eternal]) >= 2):
                     # Hex strictly requires at least 1 editionless Joker, and avoid suicidal wiping of multi-joker build
@@ -371,6 +389,15 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                 if ckey in ("c_ankh", "c_hex", "c_ectoplasm") and len(jokers) == 0:
                     continue
                 if ckey in ("c_judgement", "c_wraith") and len(jokers) >= max_joker_slots:
+                    continue
+                if ckey == "c_hermit" and state.money <= 3:
+                    continue
+                if ckey in ("c_emperor", "c_high_priestess"):
+                    max_c = state.consumables.limit or 2
+                    effective_free_slots = max_c - (len(consumables) - 1)
+                    if effective_free_slots <= 0:
+                        continue
+                if ckey == "c_fool" and not _can_use_fool(state):
                     continue
                 mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
             elif hand_cards and select_targets_for_consumable(c, hand_cards, state):

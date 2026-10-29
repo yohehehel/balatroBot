@@ -30,6 +30,7 @@ from bots.state_parser import (
     CardModifier,
     CardValue,
     GameScreen,
+    HandLevel,
     ParsedGameState,
     RoundInfo,
     parse_gamestate,
@@ -333,3 +334,114 @@ def test_step_macro_transition_executes_combat_and_cashes_out():
     assert info["state"] == "SHOP"
     assert info["reward_breakdown"]["round_base"] == 0.5
     assert env.observation_space.contains(obs)
+
+
+def test_emperor_reward_tiers():
+    """Verify The Emperor's 3 reward tiers (+0.05 for 2 free slots, -0.20 for 1 free slot, -0.45 for 0 free slots)."""
+    emperor = Card(key="c_emperor", set="Tarot")
+    dummy = Card(key="c_mercury", set="Planet")
+    next_s = ParsedGameState(state=GameScreen.SHOP)
+
+    # Pack select: 0/2 consumables held -> effective_free = 2 -> +0.05
+    prev_0 = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(cards=[emperor]),
+        consumables=AreaInfo(cards=[], limit=2),
+    )
+    r0, bd0 = calculate_step_reward(prev_state=prev_0, action=ActionID.SELECT_PACK_CARD_0, next_state=next_s)
+    assert bd0["emperor_reward"] == 0.05
+
+    # Pack select: 1/2 consumables held -> effective_free = 1 -> -0.20
+    prev_1 = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(cards=[emperor]),
+        consumables=AreaInfo(cards=[dummy], limit=2),
+    )
+    r1, bd1 = calculate_step_reward(prev_state=prev_1, action=ActionID.SELECT_PACK_CARD_0, next_state=next_s)
+    assert bd1["emperor_reward"] == -0.20
+
+    # Pack select: 2/2 consumables held -> effective_free = 0 -> -0.45
+    prev_2 = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(cards=[emperor]),
+        consumables=AreaInfo(cards=[dummy, dummy], limit=2),
+    )
+    r2, bd2 = calculate_step_reward(prev_state=prev_2, action=ActionID.SELECT_PACK_CARD_0, next_state=next_s)
+    assert bd2["emperor_reward"] == -0.45
+
+
+def test_hermit_reward_penalty_curve():
+    """Verify The Hermit reward curve at $2, $10, and $25."""
+    hermit = Card(key="c_hermit", set="Tarot")
+    next_s = ParsedGameState(state=GameScreen.SHOP)
+
+    # 1. Money = $2: -0.35 * ((20 - 2) / 20) ** 2 = -0.35 * 0.81 = -0.2835
+    prev_2 = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=2,
+        consumables=AreaInfo(cards=[hermit], limit=2),
+    )
+    r2, bd2 = calculate_step_reward(prev_state=prev_2, action=ActionID.USE_OR_SELL_CONSUMABLE_0, next_state=next_s)
+    assert pytest.approx(bd2["hermit_reward"], abs=1e-4) == -0.2835
+
+    # 2. Money = $10: -0.35 * ((20 - 10) / 20) ** 2 = -0.35 * 0.25 = -0.0875
+    prev_10 = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=10,
+        consumables=AreaInfo(cards=[hermit], limit=2),
+    )
+    r10, bd10 = calculate_step_reward(prev_state=prev_10, action=ActionID.USE_OR_SELL_CONSUMABLE_0, next_state=next_s)
+    assert pytest.approx(bd10["hermit_reward"], abs=1e-4) == -0.0875
+
+    # 3. Money = $25: bonus +0.15
+    prev_25 = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=25,
+        consumables=AreaInfo(cards=[hermit], limit=2),
+    )
+    r25, bd25 = calculate_step_reward(prev_state=prev_25, action=ActionID.USE_OR_SELL_CONSUMABLE_0, next_state=next_s)
+    assert bd25["hermit_reward"] == 0.15
+
+
+def test_planet_archetype_reward_and_dead_planet_penalty():
+    """Verify bonus on archetype planet (Mercury for Pair) vs penalty on marginal dead planet (Neptune)."""
+    mercury = Card(key="c_mercury", set="Planet")
+    neptune = Card(key="c_neptune", set="Planet")
+    next_s = ParsedGameState(state=GameScreen.SHOP, ante_num=3)
+
+    # Run in Ante 3: Pair played 30 times, Two Pair 10 times, Straight Flush 0 times
+    hands = {
+        "Pair": HandLevel(played=30),
+        "Two Pair": HandLevel(played=10),
+        "Straight Flush": HandLevel(played=0),
+    }
+
+    # 1. Buying Mercury (Pair) in Shop -> matches top-1 played hand -> +0.06
+    prev_mercury = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=3,
+        shop=AreaInfo(cards=[mercury]),
+        hands=hands,
+    )
+    rm, bdm = calculate_step_reward(prev_state=prev_mercury, action=ActionID.BUY_SHOP_CARD_0, next_state=next_s)
+    assert bdm["planet_archetype_reward"] == 0.06
+
+    # 2. Buying Neptune (Straight Flush) in Shop -> marginal hand (0% < 5%) -> -0.18
+    prev_neptune = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=3,
+        shop=AreaInfo(cards=[neptune]),
+        hands=hands,
+    )
+    rn, bdn = calculate_step_reward(prev_state=prev_neptune, action=ActionID.BUY_SHOP_CARD_0, next_state=next_s)
+    assert bdn["planet_archetype_reward"] == -0.18
+
+
+def test_credit_card_debt_penalty_on_leave_shop():
+    """Verify leaving shop with negative money applies -0.10 per $5 tranche."""
+    prev_s = ParsedGameState(state=GameScreen.SHOP, ante_num=2, money=-20)
+    next_s = ParsedGameState(state=GameScreen.BLIND_SELECT, ante_num=2, money=-20)
+
+    r, bd = calculate_step_reward(prev_state=prev_s, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    assert bd["debt_penalty"] == -0.40  # 4 tranches of $5 at -$20
+

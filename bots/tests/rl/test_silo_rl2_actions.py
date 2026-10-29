@@ -556,3 +556,82 @@ def test_joker_synergy_discard_priorities() -> None:
     )
     assert discard_card_priority(two_card, state_wee) < discard_card_priority(heart_card, state_wee)
 
+
+def test_emperor_and_hermit_masking() -> None:
+    """Verify action masking rules for The Emperor and The Hermit."""
+    emperor = _make_card("c_emperor", set_name="Tarot")
+    hermit = _make_card("c_hermit", set_name="Tarot")
+    dummy = _make_card("c_mercury", set_name="Planet")
+
+    # 1. Emperor in Booster Pack:
+    # 0/2 consumables held: free slots = 2 -> True
+    state_pack_0 = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(count=1, limit=1, cards=[emperor]),
+        consumables=AreaInfo(count=0, limit=2, cards=[]),
+    )
+    mask_pack_0 = compute_action_mask(state_pack_0)
+    assert mask_pack_0[ActionID.SELECT_PACK_CARD_0]
+
+    # 2/2 consumables held: free slots = 0 -> False
+    state_pack_2 = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(count=1, limit=1, cards=[emperor]),
+        consumables=AreaInfo(count=2, limit=2, cards=[dummy, dummy]),
+    )
+    mask_pack_2 = compute_action_mask(state_pack_2)
+    assert not mask_pack_2[ActionID.SELECT_PACK_CARD_0]
+
+    # 2. Emperor in Inventory:
+    # 1 card (Emperor alone): effective free = 2 - (1 - 1) = 2 -> True
+    state_inv_1 = ParsedGameState(
+        state=GameScreen.SHOP,
+        consumables=AreaInfo(count=1, limit=2, cards=[emperor]),
+    )
+    assert compute_action_mask(state_inv_1)[ActionID.USE_OR_SELL_CONSUMABLE_0]
+
+    # 3 cards with limit 2: effective free = 2 - (3 - 1) = 0 -> False
+    state_inv_full = ParsedGameState(
+        state=GameScreen.SHOP,
+        consumables=AreaInfo(count=3, limit=2, cards=[emperor, dummy, dummy]),
+    )
+    assert not compute_action_mask(state_inv_full)[ActionID.USE_OR_SELL_CONSUMABLE_0]
+
+    # 3. Hermit in Inventory with money <= 3:
+    state_hermit_poor = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=2,
+        consumables=AreaInfo(count=1, limit=2, cards=[hermit]),
+    )
+    assert not compute_action_mask(state_hermit_poor)[ActionID.USE_OR_SELL_CONSUMABLE_0]
+
+    state_hermit_rich = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=10,
+        consumables=AreaInfo(count=1, limit=2, cards=[hermit]),
+    )
+    assert compute_action_mask(state_hermit_rich)[ActionID.USE_OR_SELL_CONSUMABLE_0]
+
+    # 4. Hermit in Shop Card Buy:
+    hermit_shop = _make_card("c_hermit", set_name="Tarot")
+    hermit_shop.cost.buy = 3
+
+    # Money = 5: min(5 - 3, 20) = 2 <= 3 -> False
+    state_buy_poor = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=5,
+        shop=AreaInfo(count=1, limit=2, cards=[hermit_shop]),
+        consumables=AreaInfo(count=0, limit=2, cards=[]),
+    )
+    assert not compute_action_mask(state_buy_poor)[ActionID.BUY_SHOP_CARD_0]
+
+    # Money = 10: min(10 - 3, 20) = 7 > 3 -> True
+    state_buy_ok = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=10,
+        shop=AreaInfo(count=1, limit=2, cards=[hermit_shop]),
+        consumables=AreaInfo(count=0, limit=2, cards=[]),
+    )
+    assert compute_action_mask(state_buy_ok)[ActionID.BUY_SHOP_CARD_0]
+
+

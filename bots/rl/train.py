@@ -120,6 +120,9 @@ def train(
     vec_env_type: str = "dummy",
     env: gym.Env | VecEnv | None = None,
     platform: str | None = None,
+    learning_rate: float | None = None,
+    clip_range: float | None = None,
+    ent_coef: float | None = None,
 ) -> MaskablePPO:
     """Execute multi-instance Macro-RL training run."""
     ckpt_path = Path(checkpoint_dir or CHECKPOINTS_DIR)
@@ -163,25 +166,52 @@ def train(
         n_rollouts = math.ceil(total_timesteps / buffer_size)
         effective_timesteps = n_rollouts * buffer_size
 
+        from stable_baselines3.common.utils import get_schedule_fn
+
         reset_timesteps = True
         if load_model_path and Path(load_model_path).exists():
+            lr = learning_rate if learning_rate is not None else 1e-4
+            clip = clip_range if clip_range is not None else 0.12
+            ent = ent_coef if ent_coef is not None else 0.008
+
             print(f"[Model] Resuming training from checkpoint: {load_model_path}")
+            print(f"[Model] Fine-tuning overrides -> LR: {lr}, Clip Range: {clip}, Ent Coef: {ent}")
+            custom_objects = {
+                "learning_rate": lr,
+                "clip_range": clip,
+                "ent_coef": ent,
+            }
             model = MaskablePPO.load(
                 str(load_model_path),
                 env=vec_env,
+                custom_objects=custom_objects,
                 tensorboard_log=tb_path,
             )
             model.n_steps = n_steps_per_env
             if hasattr(model, "rollout_buffer") and model.rollout_buffer is not None:
                 model.rollout_buffer.buffer_size = n_steps_per_env
+            model.learning_rate = lr
+            model.lr_schedule = get_schedule_fn(lr)
+            model.clip_range = get_schedule_fn(clip)
+            model.ent_coef = ent
+            if hasattr(model, "policy") and hasattr(model.policy, "optimizer") and model.policy.optimizer:
+                for param_group in model.policy.optimizer.param_groups:
+                    param_group["lr"] = lr
             reset_timesteps = False
         else:
+            lr = learning_rate if learning_rate is not None else 3e-4
+            clip = clip_range if clip_range is not None else 0.2
+            ent = ent_coef if ent_coef is not None else 0.01
+
             model = create_model(
                 env=vec_env,
+                learning_rate=lr,
                 n_steps=n_steps_per_env,
                 batch_size=64,
+                ent_coef=ent,
                 tensorboard_log=tb_path,
             )
+            model.clip_range = get_schedule_fn(clip)
 
         checkpoint_callback = CheckpointCallback(
             save_freq=save_freq,
@@ -280,8 +310,12 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir", type=str, default=None, help="Directory to save periodic checkpoints")
     parser.add_argument("--no-launch-pool", action="store_true", help="Do not launch InstancePool (assume instances already running)")
     parser.add_argument("--vec-env", choices=["dummy", "subproc"], default="dummy", help="Vectorized environment type")
+    parser.add_argument("--resume-from", type=str, default=None, help="Path to checkpoint (.zip) to resume training and fine-tune from")
     parser.add_argument("--load-model", type=str, default=None, help="Path to existing model checkpoint (.zip) to resume training from")
     parser.add_argument("--resume", action="store_true", help="Automatically resume training from latest_model.zip if available")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate override (default: 3e-4 scratch, 1e-4 fine-tuning)")
+    parser.add_argument("--clip-range", type=float, default=None, help="PPO clip range override (default: 0.2 scratch, 0.12 fine-tuning)")
+    parser.add_argument("--ent-coef", type=float, default=None, help="Entropy coefficient override (default: 0.01 scratch, 0.008 fine-tuning)")
     parser.add_argument("--smoke-test", action="store_true", help="Run offline smoke test on mock environment")
     parser.add_argument(
         "--platform",
@@ -292,7 +326,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    load_path = args.load_model
+    load_path = args.resume_from or args.load_model
     if args.resume and not load_path:
         if DEFAULT_LATEST_MODEL_PATH.exists():
             load_path = str(DEFAULT_LATEST_MODEL_PATH)
@@ -313,6 +347,9 @@ def main() -> None:
             launch_pool=not args.no_launch_pool,
             vec_env_type=args.vec_env,
             platform=args.platform,
+            learning_rate=args.learning_rate,
+            clip_range=args.clip_range,
+            ent_coef=args.ent_coef,
         )
 
 

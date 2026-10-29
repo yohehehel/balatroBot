@@ -11,9 +11,11 @@ from typing import Any
 
 import numpy as np
 
+from bots.pack_consumable_manager import PLANET_TO_HAND
 from bots.rl.actions import ActionID
 from bots.rl.features import compute_estimated_power_ratio
-from bots.state_parser import BlindType, GameScreen, ParsedGameState
+from bots.shop_manager import JokerRole, get_joker_role
+from bots.state_parser import BlindType, Card, GameScreen, ParsedGameState
 
 
 def calculate_step_reward(
@@ -57,6 +59,11 @@ def calculate_step_reward(
         "rich_death_penalty": 0.0,
         "reroll_penalty": 0.0,
         "power_ratio_shaping": 0.0,
+        "emperor_reward": 0.0,
+        "hermit_reward": 0.0,
+        "planet_archetype_reward": 0.0,
+        "celestial_pack_penalty": 0.0,
+        "debt_penalty": 0.0,
     }
 
     # 1. Deduce flags if not explicitly passed
@@ -126,7 +133,128 @@ def calculate_step_reward(
     if action == ActionID.REROLL_SHOP:
         breakdown["reroll_penalty"] = -0.05
 
-    # 6. Power ratio shaping (only during active play, not on terminal step)
+    # 6. The Emperor usage shaping
+    if ActionID.USE_OR_SELL_CONSUMABLE_0 <= action <= ActionID.USE_OR_SELL_CONSUMABLE_3:
+        idx = action - ActionID.USE_OR_SELL_CONSUMABLE_0
+        if prev_state and prev_state.consumables and idx < len(prev_state.consumables.cards):
+            c = prev_state.consumables.cards[idx]
+            if c.key.lower() == "c_emperor":
+                max_c = prev_state.consumables.limit or 2
+                c_held = len(prev_state.consumables.cards)
+                effective_free_slots = max_c - (c_held - 1)
+                if effective_free_slots >= 2:
+                    breakdown["emperor_reward"] = 0.05
+                elif effective_free_slots == 1:
+                    breakdown["emperor_reward"] = -0.20
+                else:
+                    breakdown["emperor_reward"] = -0.45
+    elif ActionID.SELECT_PACK_CARD_0 <= action <= ActionID.SELECT_PACK_CARD_4:
+        idx = action - ActionID.SELECT_PACK_CARD_0
+        if prev_state and prev_state.pack and idx < len(prev_state.pack.cards):
+            c = prev_state.pack.cards[idx]
+            if c.key.lower() == "c_emperor":
+                max_c = (prev_state.consumables.limit if prev_state.consumables else 2) or 2
+                c_held = len(prev_state.consumables.cards) if (prev_state and prev_state.consumables) else 0
+                effective_free_slots = max_c - c_held
+                if effective_free_slots >= 2:
+                    breakdown["emperor_reward"] = 0.05
+                elif effective_free_slots == 1:
+                    breakdown["emperor_reward"] = -0.20
+                else:
+                    breakdown["emperor_reward"] = -0.45
+
+    # 7. The Hermit usage shaping
+    is_hermit_used = False
+    if ActionID.USE_OR_SELL_CONSUMABLE_0 <= action <= ActionID.USE_OR_SELL_CONSUMABLE_3:
+        idx = action - ActionID.USE_OR_SELL_CONSUMABLE_0
+        if prev_state and prev_state.consumables and idx < len(prev_state.consumables.cards):
+            if prev_state.consumables.cards[idx].key.lower() == "c_hermit":
+                is_hermit_used = True
+    elif ActionID.SELECT_PACK_CARD_0 <= action <= ActionID.SELECT_PACK_CARD_4:
+        idx = action - ActionID.SELECT_PACK_CARD_0
+        if prev_state and prev_state.pack and idx < len(prev_state.pack.cards):
+            if prev_state.pack.cards[idx].key.lower() == "c_hermit":
+                is_hermit_used = True
+
+    if is_hermit_used and prev_state:
+        money_before = float(prev_state.money)
+        if money_before >= 20.0:
+            breakdown["hermit_reward"] = 0.15
+        else:
+            penalty = -0.35 * ((20.0 - max(0.0, money_before)) / 20.0) ** 2
+            breakdown["hermit_reward"] = float(penalty)
+
+    # 8. Planet Card archetype coherence & Celestial Pack checks
+    selected_card: Card | None = None
+    if ActionID.BUY_SHOP_CARD_0 <= action <= ActionID.BUY_SHOP_CARD_3:
+        idx = action - ActionID.BUY_SHOP_CARD_0
+        if prev_state and prev_state.shop and idx < len(prev_state.shop.cards):
+            selected_card = prev_state.shop.cards[idx]
+    elif ActionID.SELECT_PACK_CARD_0 <= action <= ActionID.SELECT_PACK_CARD_4:
+        idx = action - ActionID.SELECT_PACK_CARD_0
+        if prev_state and prev_state.pack and idx < len(prev_state.pack.cards):
+            selected_card = prev_state.pack.cards[idx]
+
+    if selected_card and prev_state:
+        card_k = selected_card.key.lower()
+        card_s = (selected_card.set or "").lower()
+        is_planet = card_k in PLANET_TO_HAND or card_s == "planet" or card_k == "c_black_hole"
+
+        if is_planet and card_k != "c_black_hole":
+            jokers = prev_state.jokers.cards if prev_state.jokers else []
+            has_synergy = any(
+                j.key in ("j_constellation", "j_astronomer") and not j.state.debuff
+                for j in jokers
+            )
+            if not has_synergy:
+                target_hand = PLANET_TO_HAND.get(card_k)
+                if target_hand:
+                    hands = prev_state.hands if prev_state.hands else {}
+                    total_played = sum(h.played for h in hands.values())
+                    played_sorted = sorted(
+                        [(name, h.played) for name, h in hands.items() if h.played > 0],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )
+                    top_2_hands = {name for name, _ in played_sorted[:2]}
+
+                    if ante == 1:
+                        if target_hand in top_2_hands or target_hand in ("Pair", "Two Pair", "Flush", "Straight"):
+                            breakdown["planet_archetype_reward"] = 0.06
+                    else:
+                        if target_hand in top_2_hands:
+                            breakdown["planet_archetype_reward"] = 0.06
+                        else:
+                            hand_played = hands[target_hand].played if target_hand in hands else 0
+                            hand_pct = (hand_played / total_played) if total_played > 0 else 0.0
+                            if hand_pct < 0.05:
+                                breakdown["planet_archetype_reward"] = -0.18
+
+    # Celestial Pack purchase check in Ante 1-2
+    if ActionID.BUY_BOOSTER_0 <= action <= ActionID.BUY_BOOSTER_1:
+        idx = action - ActionID.BUY_BOOSTER_0
+        if prev_state and prev_state.packs and idx < len(prev_state.packs.cards):
+            pack = prev_state.packs.cards[idx]
+            pkey = (pack.key or "").lower()
+            plabel = (getattr(pack, "label", None) or "").lower()
+            if ("celestial" in pkey or "celestial" in plabel) and ante in (1, 2):
+                scoring_roles = {JokerRole.CHIPS, JokerRole.ADD_MULT, JokerRole.X_MULT, JokerRole.RETRIGGER_COPY}
+                jokers = prev_state.jokers.cards if prev_state.jokers else []
+                scoring_jokers = [
+                    j for j in jokers
+                    if not j.state.debuff and get_joker_role(j.key) in scoring_roles
+                ]
+                if len(scoring_jokers) < 2:
+                    breakdown["celestial_pack_penalty"] = -0.15
+
+    # 9. Credit Card debt penalty when leaving shop
+    if action == ActionID.LEAVE_SHOP:
+        money = next_state.money if next_state else (prev_state.money if prev_state else 0)
+        if money < 0:
+            tranches = math.ceil(abs(float(money)) / 5.0)
+            breakdown["debt_penalty"] = -0.10 * float(tranches)
+
+    # 10. Power ratio shaping (only during active play, not on terminal step)
     if prev_state and not is_game_over and not is_game_won:
         try:
             pr_prev = compute_estimated_power_ratio(prev_state)

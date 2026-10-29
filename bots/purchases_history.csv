@@ -46590,3 +46590,12 @@ timestamp,worker_id,seed,ante,round_num,money,action,category,item_key,item_name
 2026-10-29 15:09:43,1,T2P9EKX1,5,13,5,SELL,joker,j_jolly,Jolly Joker
 2026-10-29 15:09:43,1,T2P9EKX1,5,13,6,BUY,joker,j_reserved_parking,Reserved Parking
 2026-10-29 15:09:43,1,T2P9EKX1,5,13,0,USE,planet,c_pluto,Pluto
+2026-10-29 18:58:45,1,BXUAY8QE,1,1,9,BUY,joker,j_crazy,Crazy Joker
+2026-10-29 18:59:34,1,BXUAY8QE,1,2,12,BUY,tarot,c_temperance,Temperance
+2026-10-29 18:59:41,1,BXUAY8QE,1,2,9,BUY,tarot,c_earth,Earth
+2026-10-29 18:59:49,1,BXUAY8QE,1,2,6,BUY,pack,p_arcana_normal_2,Arcana Pack
+2026-10-29 18:59:57,1,BXUAY8QE,1,2,2,BUY,tarot,c_magician,The Magician
+2026-10-29 19:00:05,1,BXUAY8QE,1,2,2,USE,tarot,c_temperance,Temperance
+2026-10-29 19:00:13,1,BXUAY8QE,1,2,4,USE,planet,c_earth,Earth
+2026-10-29 19:00:20,1,BXUAY8QE,1,2,4,BUY,pack,p_standard_normal_2,Standard Pack
+2026-10-29 19:00:28,1,BXUAY8QE,1,2,0,BUY,playing_card,S_A,Lucky Card
