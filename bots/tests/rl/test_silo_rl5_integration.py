@@ -166,6 +166,27 @@ def test_evaluate_rl_agent_multi_run(
     assert len(records) == 2
 
 
+def test_evaluate_rl_agent_with_temperature(
+    saved_test_model: Path,
+    mock_client: MockBalatroStateMachine,
+    tmp_path: Path,
+) -> None:
+    csv_file = tmp_path / "eval_temp.csv"
+    results = evaluate_rl_agent(
+        model_path=saved_test_model,
+        client=mock_client,
+        num_runs=1,
+        delay=0.0,
+        max_steps=10,
+        csv_path=csv_file,
+        temperature=0.8,
+    )
+
+    assert len(results) == 1
+    assert "win" in results[0]
+
+
+
 # ── 4. Multi-Env Training Function ───────────────────────────────────────────
 
 def test_train_function_with_mock_env(mock_vec_env: DummyVecEnv, tmp_path: Path) -> None:

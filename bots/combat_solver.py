@@ -428,6 +428,96 @@ def _is_boss_active(state: ParsedGameState) -> bool:
     return True
 
 
+def _is_psychic_active(state: ParsedGameState) -> bool:
+    """Return True if The Psychic boss blind is active and not disabled."""
+    if not _is_boss_active(state):
+        return False
+    b = state.active_blind
+    if not b:
+        return False
+    bname = (b.name or "").lower()
+    bkey = (getattr(b, "key", None) or "").lower()
+    return "psychic" in bname or "psychic" in bkey
+
+
+def _is_ox_active(state: ParsedGameState) -> bool:
+    """Return True if The Ox boss blind is active and not disabled."""
+    if not _is_boss_active(state):
+        return False
+    b = state.active_blind
+    if not b:
+        return False
+    bname = (b.name or "").lower()
+    bkey = (getattr(b, "key", None) or "").lower()
+    return "ox" in bname or "ox" in bkey
+
+
+def _get_most_played_hand(state: ParsedGameState) -> str | None:
+    """Return the name of the most played poker hand this run."""
+    if not state.hands:
+        return None
+    max_p = 0
+    most_played = None
+    for hname, hinfo in state.hands.items():
+        if hinfo.played > max_p:
+            max_p = hinfo.played
+            most_played = hname
+    return most_played
+
+
+def _ensure_five_cards_for_psychic(
+    decision: CombatDecision,
+    state: ParsedGameState,
+) -> CombatDecision:
+    """Guarantee that PLAY decisions against The Psychic have exactly 5 cards."""
+    if decision.action != CombatAction.PLAY:
+        return decision
+    hand_cards = state.hand.cards
+    if len(hand_cards) < 5:
+        return decision
+    if len(decision.indices) >= 5:
+        return decision
+
+    current_indices = list(decision.indices)
+    needed = 5 - len(current_indices)
+    available = [i for i in range(len(hand_cards)) if i not in set(current_indices)]
+    # Pick kickers that are best to get rid of (highest discard priority)
+    available.sort(key=lambda i: discard_card_priority(hand_cards[i], state), reverse=True)
+    completed_indices = current_indices + available[:needed]
+    completed_indices.sort()
+
+    played = [hand_cards[i] for i in completed_indices]
+    held = [hand_cards[i] for i in range(len(hand_cards)) if i not in set(completed_indices)]
+    jkeys = _get_joker_keys(state)
+    hand_type, scoring_cards = identify_poker_hand(played, jkeys)
+    base_c, fin_c, fin_m, score, debuffed = calculate_hand_score(
+        played, held, hand_type, scoring_cards, state
+    )
+    cons_val = sum(card_conservation_value(c) for c in held)
+
+    cand = HandCandidate(
+        indices=tuple(completed_indices),
+        cards=played,
+        hand_type=hand_type,
+        scoring_cards=scoring_cards,
+        base_chips=base_c,
+        base_mult=fin_m,
+        final_chips=fin_c,
+        final_mult=fin_m,
+        score=score,
+        debuffed=debuffed,
+        conservation_score=cons_val,
+    )
+    return CombatDecision(
+        action=CombatAction.PLAY,
+        indices=completed_indices,
+        cards=played,
+        reason=f"{decision.reason} [The Psychic: completed to 5 cards]",
+        candidate=cand,
+        predicted_score=score,
+    )
+
+
 def _get_joker_dynamic_mult(j: Card) -> float:
     """Extract dynamic/accumulated +Mult from card.value (mult or extra)."""
     # For scaling jokers whose current mult is tracked in card.ability.mult:
@@ -1139,7 +1229,8 @@ def select_best_play(state: ParsedGameState) -> HandCandidate | None:
 
     Decision rules:
     1. If one or more plays beat the remaining chips needed:
-       - Choose the winning play that uses the fewest cards.
+       - Choose the winning play that uses the fewest cards (unless Blackboard activates 100% black held cards).
+       - Protect economy against The Ox (avoid most played hand if safe alternative wins).
        - Break ties by preserving maximum conservation value in hand.
        - Further break ties by highest score.
     2. Otherwise, select the combination that maximises predicted score.
@@ -1153,6 +1244,10 @@ def select_best_play(state: ParsedGameState) -> HandCandidate | None:
     target_score = active_blind.score if active_blind else 300
     chips_needed = max(0, target_score - state.round.chips)
 
+    hand_cards = state.hand.cards
+    n = len(hand_cards)
+    jkeys = _get_joker_keys(state)
+
     winning_candidates = [c for c in candidates if not c.debuffed and c.score >= chips_needed]
 
     # Mr. Bones safety net: on final hand, reaching >= 25% of target prevents death
@@ -1161,15 +1256,48 @@ def select_best_play(state: ParsedGameState) -> HandCandidate | None:
             bones_threshold = max(0, math.ceil(target_score * 0.25) - state.round.chips)
             winning_candidates = [c for c in candidates if not c.debuffed and c.score >= bones_threshold]
 
+    # The Ox avoidance: if money > 10, avoid resetting bankroll to $0 if alternative exists
+    is_ox = _is_ox_active(state)
+    most_played_hand = _get_most_played_hand(state) if is_ox else None
+    avoid_ox = is_ox and most_played_hand is not None and state.money > 10
+
+    if avoid_ox and winning_candidates:
+        safe_winning = [c for c in winning_candidates if c.hand_type != most_played_hand]
+        if safe_winning:
+            winning_candidates = safe_winning
+
     if winning_candidates:
-        # Prioritise:
-        # 1. Fewest cards played (len(indices) ascending)
-        # 2. Highest conservation value in hand (conservation_score descending)
-        # 3. Highest predicted score (score descending)
-        winning_candidates.sort(
-            key=lambda c: (len(c.indices), -c.conservation_score, -c.score)
-        )
+        has_blackboard = "j_blackboard" in jkeys
+
+        def _winning_sort_key(c: HandCandidate) -> tuple:
+            held_is_black = False
+            if has_blackboard:
+                held = [hand_cards[i] for i in range(n) if i not in set(c.indices)]
+                held_is_black = all(
+                    cd.modifier.enhancement == "STONE" or cd.value.suit in ("S", "C")
+                    for cd in held
+                )
+
+            # Normally fewest cards played, but if Blackboard achieves 100% black held cards,
+            # we do not penalize using extra kickers to purge red cards!
+            card_count_penalty = 0 if held_is_black else len(c.indices)
+            is_ox_hand = 1 if (avoid_ox and c.hand_type == most_played_hand) else 0
+
+            return (
+                is_ox_hand,
+                -int(held_is_black),
+                card_count_penalty,
+                -c.conservation_score,
+                -c.score,
+            )
+
+        winning_candidates.sort(key=_winning_sort_key)
         return winning_candidates[0]
+
+    if avoid_ox and candidates:
+        safe_candidates = [c for c in candidates if not c.debuffed and c.hand_type != most_played_hand]
+        if safe_candidates:
+            return safe_candidates[0]
 
     # No play wins in 1 shot: maximise predicted score
     return candidates[0]
@@ -1652,7 +1780,7 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
 
     # ── Rule 1: Immediate Kill Shot (Guaranteed win on this play) ────────────
     if best_play and not best_play.debuffed and best_play.score >= chips_needed:
-        return CombatDecision(
+        dec = CombatDecision(
             action=CombatAction.PLAY,
             indices=list(best_play.indices),
             cards=best_play.cards,
@@ -1660,12 +1788,24 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
             candidate=best_play,
             predicted_score=best_play.score,
         )
+        if _is_psychic_active(state):
+            dec = _ensure_five_cards_for_psychic(dec, state)
+        return dec
+
+    # ── Rule 1.B: Absolute Survival Law on Final Hand (hands_left == 1 / The Needle) ─
+    # If only 1 hand remains, playing a hand that does NOT reach chips_needed guarantees immediate DEFEAT.
+    # If discards remain, it is strictly forbidden to play: we MUST discard to dig for a win or Blackboard purge!
+    final_hand_survival = (
+        hands_left == 1
+        and discards_left > 0
+        and (not best_play or best_play.debuffed or best_play.score < chips_needed)
+    )
 
     # ── Rule 2: Zero discards left or discards blocked ──────────────────────
     has_anti_discard = ("j_green_joker" in jkeys) or ("j_ramen" in jkeys)
     anti_discard_blocking = has_anti_discard and best_play and (best_play.score >= required_pace)
 
-    if discards_left <= 0 or anti_discard_blocking:
+    if not final_hand_survival and (discards_left <= 0 or anti_discard_blocking):
         if (
             best_play
             and hands_left > 1
@@ -1674,7 +1814,7 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
             and best_play.score < required_pace
         ):
             recycle_indices = add_kickers_for_recycle(state, best_play)
-            return CombatDecision(
+            dec = CombatDecision(
                 action=CombatAction.PLAY,
                 indices=recycle_indices,
                 cards=[state.hand.cards[i] for i in recycle_indices],
@@ -1682,6 +1822,9 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
                 candidate=best_play,
                 predicted_score=best_play.score,
             )
+            if _is_psychic_active(state):
+                dec = _ensure_five_cards_for_psychic(dec, state)
+            return dec
 
         block_reason = "Anti-discard Joker active" if anti_discard_blocking else "No discards left"
         play_candidate = best_play or HandCandidate(
@@ -1695,7 +1838,7 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
             final_mult=1.0,
             score=5,
         )
-        return CombatDecision(
+        dec = CombatDecision(
             action=CombatAction.PLAY,
             indices=list(play_candidate.indices),
             cards=play_candidate.cards,
@@ -1703,19 +1846,27 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
             candidate=play_candidate,
             predicted_score=play_candidate.score,
         )
+        if _is_psychic_active(state):
+            dec = _ensure_five_cards_for_psychic(dec, state)
+        return dec
 
     # ── Rule 3: Current hand already excellent (Tempo sufficient) ───────────
-    if best_play and not best_play.debuffed:
+    is_ox = _is_ox_active(state)
+    most_played_hand = _get_most_played_hand(state) if is_ox else None
+    avoid_ox = is_ox and most_played_hand is not None and state.money > 10
+
+    if not final_hand_survival and best_play and not best_play.debuffed:
         is_major_hand = best_play.hand_type in MAJOR_HANDS
         has_tempo_score = best_play.score >= required_pace * 1.25
+        ox_penalty_hit = avoid_ox and best_play.hand_type == most_played_hand
 
-        if is_major_hand or has_tempo_score:
+        if (is_major_hand or has_tempo_score) and not (ox_penalty_hit and discards_left > 0):
             reason = (
                 f"Tempo Play - Major hand ({best_play.hand_type}) with score {best_play.score}"
                 if is_major_hand
                 else f"Tempo Play - Score {best_play.score} covers pace ({required_pace * 1.25:.0f})"
             )
-            return CombatDecision(
+            dec = CombatDecision(
                 action=CombatAction.PLAY,
                 indices=list(best_play.indices),
                 cards=best_play.cards,
@@ -1723,6 +1874,9 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
                 candidate=best_play,
                 predicted_score=best_play.score,
             )
+            if _is_psychic_active(state):
+                dec = _ensure_five_cards_for_psychic(dec, state)
+            return dec
 
     # ── Rule 4: Targeted Discard Heuristics (discards_left > 0 & weak hand) ─
     # Special case: Trading Card (j_trading) on first discard of the round
@@ -1803,7 +1957,18 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
             predicted_score=0,
         )
 
-    # Ultimate fallback: play best available combination
+    # Ultimate fallback: play best available combination, UNLESS we are in final_hand_survival!
+    if discards_left > 0 and (final_hand_survival or (best_play and best_play.score < chips_needed and hands_left == 1)):
+        force_discard = pick_discard_indices(state, set(), max_count=min(5, len(hand_cards)))
+        if force_discard:
+            return CombatDecision(
+                action=CombatAction.DISCARD,
+                indices=force_discard,
+                cards=[hand_cards[i] for i in force_discard],
+                reason=f"Survival Discard - Final hand insufficient score ({best_play.score if best_play else 0} < {chips_needed})",
+                predicted_score=0,
+            )
+
     fallback_play = best_play or HandCandidate(
         indices=(0,),
         cards=[hand_cards[0]],
@@ -1815,7 +1980,7 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
         final_mult=1.0,
         score=5,
     )
-    return CombatDecision(
+    dec = CombatDecision(
         action=CombatAction.PLAY,
         indices=list(fallback_play.indices),
         cards=fallback_play.cards,
@@ -1823,3 +1988,6 @@ def decide_combat_action(state: ParsedGameState) -> CombatDecision:
         candidate=fallback_play,
         predicted_score=fallback_play.score,
     )
+    if _is_psychic_active(state):
+        dec = _ensure_five_cards_for_psychic(dec, state)
+    return dec

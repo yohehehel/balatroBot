@@ -445,3 +445,39 @@ def test_credit_card_debt_penalty_on_leave_shop():
     r, bd = calculate_step_reward(prev_state=prev_s, action=ActionID.LEAVE_SHOP, next_state=next_s)
     assert bd["debt_penalty"] == -0.40  # 4 tranches of $5 at -$20
 
+
+def test_passive_hoarding_penalty_on_leave_shop():
+    """Verify hoarding penalty applies on LEAVE_SHOP in Ante 3+ when rich (>45$) without Bull/Bootstraps."""
+    # 1. Ante 3, $60, no jokers -> applies -0.15 penalty
+    prev_hoard = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=3,
+        money=60,
+        jokers=AreaInfo(cards=[], limit=5),
+    )
+    next_s = ParsedGameState(state=GameScreen.BLIND_SELECT, ante_num=3, money=60)
+    r1, bd1 = calculate_step_reward(prev_state=prev_hoard, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    assert bd1["hoarding_penalty"] == -0.15
+
+    # 2. Ante 3, $60, but owns Bull (j_bull) -> exempt (0.0)
+    bull = Card(key="j_bull", set="Joker")
+    prev_bull = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=3,
+        money=60,
+        jokers=AreaInfo(cards=[bull], limit=5),
+    )
+    r2, bd2 = calculate_step_reward(prev_state=prev_bull, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    assert bd2["hoarding_penalty"] == 0.0
+
+    # 3. Ante 2 (Early Ante), $60, no jokers -> exempt (0.0)
+    prev_ante2 = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=2,
+        money=60,
+        jokers=AreaInfo(cards=[], limit=5),
+    )
+    r3, bd3 = calculate_step_reward(prev_state=prev_ante2, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    assert bd3["hoarding_penalty"] == 0.0
+
+

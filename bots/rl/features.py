@@ -423,9 +423,18 @@ def compute_estimated_power_ratio(state: ParsedGameState) -> float:
     except Exception:
         predicted_score = 50
 
-    # Scale by hands per round
+    # Scale by hands per round (factoring in Card Sharp x3 on repeat hands)
     hands_capacity = state.round.hands_left if state.round.hands_left > 0 else 4
-    estimated_capacity = float(max(1, predicted_score)) * float(max(1, hands_capacity))
+    jkeys = {j.key for j in (state.jokers.cards if state.jokers else []) if not j.state.debuff and j.key}
+
+    if "j_card_sharp" in jkeys and hands_capacity >= 2 and dominant_hand in (
+        "High Card", "Pair", "Two Pair", "Flush", "Straight", "Three of a Kind"
+    ):
+        # First hand scores 1x, subsequent (hands_capacity - 1) hands score 3x with Card Sharp
+        effective_hands = 1.0 + float(hands_capacity - 1) * 3.0
+        estimated_capacity = float(max(1, predicted_score)) * effective_hands
+    else:
+        estimated_capacity = float(max(1, predicted_score)) * float(max(1, hands_capacity))
 
     ratio = math.log10(max(1.0, estimated_capacity) / target)
     return float(np.clip(ratio, -2.0, 2.0))

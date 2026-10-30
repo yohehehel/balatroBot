@@ -239,7 +239,11 @@ def train(
             initial_timesteps=start_timesteps,
         )
         progress_callback = TrainingProgressCallback(display=progress_display)
-        telemetry_callback = RLTelemetryCallback(rolling_window=20)
+        telemetry_callback = RLTelemetryCallback(
+            rolling_window=20,
+            winrate_window=50,
+            winrate_save_path=ckpt_path / "best_winrate_model.zip",
+        )
 
         model.learn(
             total_timesteps=total_timesteps,

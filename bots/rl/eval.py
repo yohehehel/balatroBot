@@ -18,11 +18,14 @@ import sys
 import time
 from typing import Any
 
+import numpy as np
 from sb3_contrib import MaskablePPO
 
 from bots.client_wrapper import BalatroClient, ClientConfig
 from bots.instance_pool import InstancePool
+from bots.rl.actions import ActionID
 from bots.rl.env import BalatroMacroEnv
+from bots.state_parser import GameScreen
 from bots.telemetry import (
     DEFAULT_CSV_PATH,
     RunRecord,
@@ -93,6 +96,7 @@ def run_rl_episode(
     deck: str = "RED",
     stake: str = "WHITE",
     csv_path: str | Path | None = None,
+    temperature: float | None = None,
 ) -> dict[str, Any]:
     """Execute a single complete game run driven by the trained RL agent."""
     env = BalatroMacroEnv(
@@ -118,7 +122,42 @@ def run_rl_episode(
 
     while not (terminated or truncated):
         mask = env.action_masks()
-        action, _ = model.predict(obs, action_masks=mask, deterministic=True)
+
+        if temperature is not None and temperature > 0.0:
+            obs_th, _ = model.policy.obs_to_tensor(obs)
+            dist = model.policy.get_distribution(obs_th)
+            dist.apply_masking(mask)
+            logits = dist.distribution.logits[0].detach().cpu().numpy()
+            scaled_logits = logits / max(1e-5, temperature)
+            scaled_logits -= np.max(scaled_logits)
+            probs = np.exp(scaled_logits)
+            probs[~mask] = 0.0
+            p_sum = np.sum(probs)
+            if p_sum > 0:
+                probs /= p_sum
+                action = int(np.random.choice(len(probs), p=probs))
+            else:
+                action = int(np.argmax(mask))
+        else:
+            obs_th, _ = model.policy.obs_to_tensor(obs)
+            dist = model.policy.get_distribution(obs_th)
+            dist.apply_masking(mask)
+            probs = dist.distribution.probs[0].detach().cpu().numpy()
+            action = int(np.argmax(probs))
+
+            # Smart Greedy in SHOP:
+            # If deterministic argmax selects LEAVE_SHOP, but probability of LEAVE_SHOP is < 0.45
+            # (i.e. model wants to stay/buy in shop at > 55% cumulative probability) AND money > $30,
+            # choose best active shop action (argmax among valid actions excluding LEAVE_SHOP).
+            if env.state.state == GameScreen.SHOP and action == ActionID.LEAVE_SHOP:
+                leave_prob = float(probs[ActionID.LEAVE_SHOP])
+                if leave_prob < 0.45 and env.state.money > 30:
+                    valid_active = [a for a in range(len(probs)) if mask[a] and a != ActionID.LEAVE_SHOP]
+                    if valid_active:
+                        best_active = max(valid_active, key=lambda a: probs[a])
+                        if probs[best_active] > 0.0:
+                            action = int(best_active)
+
         obs, reward, terminated, truncated, info = env.step(action)
 
         total_reward += float(reward)
@@ -189,6 +228,7 @@ def evaluate_rl_agent(
     csv_path: str | Path | None = None,
     headless: bool = True,
     platform: str | None = None,
+    temperature: float | None = None,
 ) -> list[dict[str, Any]]:
     """Run an evaluation session of N runs using the RL agent."""
     pool: InstancePool | None = None
@@ -217,7 +257,7 @@ def evaluate_rl_agent(
         print(f"\n=======================================================")
         print(f"  STARTING RL AGENT EVALUATION ({num_runs} RUN(S))")
         print(f"  Model: {model_path or 'default checkpoint'}")
-        print(f"  Port: {port} | Delay: {delay}s | Endless: {endless}")
+        print(f"  Port: {port} | Delay: {delay}s | Endless: {endless} | Temp: {temperature or 'Greedy'}")
         print(f"=======================================================\n")
 
         results: list[dict[str, Any]] = []
@@ -234,6 +274,7 @@ def evaluate_rl_agent(
                 deck=deck,
                 stake=stake,
                 csv_path=csv_path,
+                temperature=temperature,
             )
             results.append(summary)
 
@@ -283,6 +324,7 @@ def main() -> None:
     parser.add_argument("--gui", action="store_true", help="Run Balatro in GUI mode if auto-launching an instance")
     parser.add_argument("--endless", action="store_true", help="Continue playing after Ante 8")
     parser.add_argument("--seed", type=str, default=None, help="Seed for runs")
+    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature for action selection (default: None for Greedy)")
     parser.add_argument("--csv-path", type=str, default=None, help="Path to save telemetry CSV")
     parser.add_argument(
         "--platform",
@@ -304,6 +346,7 @@ def main() -> None:
         csv_path=args.csv_path,
         headless=not args.gui,
         platform=args.platform,
+        temperature=args.temperature,
     )
 
 

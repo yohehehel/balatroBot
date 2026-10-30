@@ -20,6 +20,7 @@ from bots.combat_solver import (
     discard_card_priority,
     get_debuffed_suits,
     pick_discard_indices,
+    select_best_play,
 )
 from bots.state_parser import (
     AreaInfo,
@@ -84,12 +85,15 @@ def _make_combat_state(
     blind_score: int = 300,
     blind_name: str = "Small Blind",
     blind_type: str = "SMALL",
+    blind_effect: str = "",
+    money: int = 4,
     deck_cards: list[Card] | None = None,
 ) -> ParsedGameState:
     return ParsedGameState(
         state="SELECTING_HAND",
         round_num=1,
         ante_num=1,
+        money=money,
         round=RoundInfo(
             hands_left=hands_left,
             discards_left=discards_left,
@@ -101,7 +105,7 @@ def _make_combat_state(
                 type=blind_type,
                 status="CURRENT",
                 name=blind_name,
-                effect="",
+                effect=blind_effect,
                 score=blind_score,
             )
         },
@@ -424,3 +428,133 @@ def test_pick_discard_indices_never_empty_and_max_5():
     indices2 = pick_discard_indices(state, keep_indices={0, 1, 2, 3, 4, 5, 6})
     assert len(indices2) == 1
     assert indices2[0] == 7
+
+
+# ── Test 10: The Needle survival discard ──────────────────────────────────
+
+def test_the_needle_forces_discard_when_score_insufficient_and_discards_left():
+    """Rule 1.B: When hands_left == 1 and score < chips_needed, PLAY is forbidden if discards remain."""
+    cards = [
+        _make_card("A", "H", 1),
+        _make_card("K", "H", 2),
+        _make_card("Q", "H", 3),
+        _make_card("J", "H", 4),
+        _make_card("9", "H", 5),
+    ]
+    # Blind needs 50,000 chips; the Flush only scores ~150 chips.
+    state = _make_combat_state(
+        hand_cards=cards,
+        discards_left=2,
+        hands_left=1,
+        blind_score=50000,
+        blind_name="The Needle",
+        blind_effect="bl_needle",
+        blind_type="BOSS",
+    )
+
+    decision = decide_combat_action(state)
+
+    # Even though it's a Flush (Major hand), playing would guarantee instant loss
+    assert decision.action == CombatAction.DISCARD
+
+
+# ── Test 11: The Psychic strict 5-card requirement ────────────────────────
+
+def test_the_psychic_strictly_requires_5_cards_on_play():
+    """The Psychic boss debuffs plays with < 5 cards; solver must pad to exactly 5 cards."""
+    cards = [
+        _make_card("A", "S", 1),
+        _make_card("A", "H", 2),
+        _make_card("4", "C", 3),
+        _make_card("6", "D", 4),
+        _make_card("8", "S", 5),
+        _make_card("9", "C", 6),
+        _make_card("K", "D", 7),
+    ]
+    # Kill shot with Pair of Aces (needs 40 chips, Pair scores ~50)
+    state = _make_combat_state(
+        hand_cards=cards,
+        discards_left=2,
+        hands_left=3,
+        blind_score=40,
+        blind_name="The Psychic",
+        blind_effect="bl_psychic",
+        blind_type="BOSS",
+    )
+
+    decision = decide_combat_action(state)
+
+    assert decision.action == CombatAction.PLAY
+    assert len(decision.indices) == 5
+    assert 0 in decision.indices and 1 in decision.indices
+
+
+# ── Test 12: The Ox economy protection ────────────────────────────────────
+
+def test_the_ox_avoids_most_played_hand_when_wealthy():
+    """Against The Ox, if player has money > 10, avoid playing most played hand if safe alternative exists."""
+    # 5 Spades cards with a Pair of Aces:
+    # A of Spades, A of Clubs, K of Spades, Q of Spades, J of Spades
+    cards = [
+        _make_card("A", "S", 1),
+        _make_card("A", "C", 2),
+        _make_card("K", "S", 3),
+        _make_card("Q", "S", 4),
+        _make_card("J", "S", 5),
+    ]
+    # Flush played 25 times; Pair played 2 times
+    state = _make_combat_state(
+        hand_cards=cards,
+        discards_left=2,
+        hands_left=3,
+        blind_score=30,  # Both Flush and Pair will win immediately (Kill shot)
+        blind_name="The Ox",
+        blind_effect="bl_ox",
+        blind_type="BOSS",
+        money=35,
+    )
+    state.hands["Flush"].played = 25
+    state.hands["Pair"].played = 2
+
+    best = select_best_play(state)
+    assert best is not None
+    # Flush is most played: Ox would set money to 0! Solver must choose Pair instead
+    assert best.hand_type != "Flush"
+    assert best.hand_type == "Pair"
+
+    decision = decide_combat_action(state)
+    assert decision.action == CombatAction.PLAY
+    assert decision.candidate.hand_type == "Pair"
+
+
+# ── Test 13: Blackboard red kicker purge ──────────────────────────────────
+
+def test_blackboard_purges_red_cards_via_kickers():
+    """Blackboard x3 Mult triggers when all held cards are black; solver includes red cards as kickers."""
+    # 2 Black cards (Pair of 2s), 2 Red cards (4H, 5D), and 2 Black cards (8S, 9C)
+    cards = [
+        _make_card("2", "S", 1),
+        _make_card("2", "C", 2),
+        _make_card("4", "H", 3),
+        _make_card("5", "D", 4),
+        _make_card("8", "S", 5),
+        _make_card("9", "C", 6),
+    ]
+    j_bb = _make_joker("j_blackboard")
+    state = _make_combat_state(
+        hand_cards=cards,
+        jokers=[j_bb],
+        discards_left=2,
+        hands_left=3,
+        blind_score=50,  # 2-card Pair scores 28 (<50); 4-card Pair with Blackboard scores 84 (>=50)
+    )
+
+    best = select_best_play(state)
+    assert best is not None
+    # Must play 4 cards (including the 2 red cards: indices 2 and 3)
+    assert 2 in best.indices and 3 in best.indices
+    # Remaining held cards must all be black (8S, 9C)
+    held = [cards[i] for i in range(len(cards)) if i not in set(best.indices)]
+    assert all(c.value.suit in ("S", "C") for c in held)
+    assert best.score >= 50
+

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import collections
 import logging
+from pathlib import Path
 from typing import Any
 
 from stable_baselines3.common.callbacks import BaseCallback
@@ -33,14 +34,24 @@ TRACKED_HAND_TYPES = [
 class RLTelemetryCallback(BaseCallback):
     """Logs live game, economic, combat, and hand-type telemetry to TensorBoard."""
 
-    def __init__(self, rolling_window: int = 20, verbose: int = 0) -> None:
+    def __init__(
+        self,
+        rolling_window: int = 20,
+        winrate_window: int = 50,
+        winrate_save_path: str | Path | None = None,
+        verbose: int = 0,
+    ) -> None:
         super().__init__(verbose)
         self.rolling_window = rolling_window
+        self.winrate_window = winrate_window
+        self.winrate_save_path = Path(winrate_save_path) if winrate_save_path else None
         self.episode_count = 0
         self.recent_wins = collections.deque(maxlen=rolling_window)
+        self.recent_50_wins = collections.deque(maxlen=winrate_window)
         self.recent_antes = collections.deque(maxlen=rolling_window)
         self.hand_type_counter: collections.Counter[str] = collections.Counter()
         self.total_hands_seen: int = 0
+        self.best_winrate: float = 0.0
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -64,19 +75,32 @@ class RLTelemetryCallback(BaseCallback):
             if "episode_summary" in info:
                 ep = info["episode_summary"]
                 self.episode_count += 1
-                self.recent_wins.append(1.0 if ep.get("win") else 0.0)
+                win_val = 1.0 if ep.get("win") else 0.0
+                self.recent_wins.append(win_val)
+                self.recent_50_wins.append(win_val)
                 self.recent_antes.append(ep.get("max_ante", 1))
 
                 win_rate = sum(self.recent_wins) / max(1, len(self.recent_wins))
+                win_rate_50 = sum(self.recent_50_wins) / max(1, len(self.recent_50_wins))
                 avg_ante = sum(self.recent_antes) / max(1, len(self.recent_antes))
 
                 # Game Progression
                 self.logger.record("game/max_ante", ep.get("max_ante", 1))
                 self.logger.record(f"game/avg_ante_rolling{self.rolling_window}", avg_ante)
                 self.logger.record(f"game/win_rate_rolling{self.rolling_window}", win_rate)
+                self.logger.record(f"game/win_rate_rolling{self.winrate_window}", win_rate_50)
                 self.logger.record("game/final_money", ep.get("final_money", 0))
                 self.logger.record("game/max_money", ep.get("max_money", 0))
                 self.logger.record("game/total_reward", ep.get("total_reward", 0.0))
+
+                # Save best_winrate_model.zip if new best rolling win rate achieved (minimum 20 episodes)
+                if len(self.recent_50_wins) >= 20 and win_rate_50 > self.best_winrate and self.winrate_save_path:
+                    self.best_winrate = win_rate_50
+                    try:
+                        self.model.save(str(self.winrate_save_path))
+                        print(f"\n[Model Save] New best 50-ep rolling win rate: {win_rate_50 * 100:.1f}% -> Saved to {self.winrate_save_path}\n")
+                    except Exception as e:
+                        logger.warning(f"Failed to save best win rate model: {e}")
 
                 # Economy & Shop Actions
                 self.logger.record("shop/jokers_bought", ep.get("jokers_bought", 0))

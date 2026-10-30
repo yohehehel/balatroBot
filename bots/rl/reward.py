@@ -64,6 +64,7 @@ def calculate_step_reward(
         "planet_archetype_reward": 0.0,
         "celestial_pack_penalty": 0.0,
         "debt_penalty": 0.0,
+        "hoarding_penalty": 0.0,
     }
 
     # 1. Deduce flags if not explicitly passed
@@ -254,7 +255,20 @@ def calculate_step_reward(
             tranches = math.ceil(abs(float(money)) / 5.0)
             breakdown["debt_penalty"] = -0.10 * float(tranches)
 
-    # 10. Power ratio shaping (only during active play, not on terminal step)
+    # 10. Passive Hoarding Penalty (outside Bull / Bootstraps) when leaving shop in Ante 3+
+    if action == ActionID.LEAVE_SHOP and ante >= 3:
+        jokers = (prev_state.jokers.cards if prev_state and prev_state.jokers else []) or (next_state.jokers.cards if next_state and next_state.jokers else [])
+        has_bull_or_bootstraps = any(j.key in ("j_bull", "j_bootstraps") and not j.state.debuff for j in jokers)
+        money = prev_state.money if prev_state else next_state.money
+        if not has_bull_or_bootstraps and money > 45:
+            st = prev_state or next_state
+            pr = compute_estimated_power_ratio(st) if st else 1.0
+            max_slots = (st.jokers.limit if st and st.jokers else 5) or 5
+            has_free_slot = len(jokers) < max_slots
+            if pr < 0.35 or has_free_slot:
+                breakdown["hoarding_penalty"] = -0.15
+
+    # 11. Power ratio shaping (only during active play, not on terminal step)
     if prev_state and not is_game_over and not is_game_won:
         try:
             pr_prev = compute_estimated_power_ratio(prev_state)
