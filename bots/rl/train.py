@@ -252,11 +252,13 @@ def train(
         )
         progress_display.close()
 
-        # Save model to target save path and latest_model.zip
+        # Save model to target save path, latest_model.zip, and final_model.zip
         model.save(str(final_save_path))
         latest_path = ckpt_path / "latest_model.zip"
         model.save(str(latest_path))
-        print(f"\n[Training Complete] Model saved to {final_save_path} and {latest_path}")
+        final_path = ckpt_path / "final_model.zip"
+        model.save(str(final_path))
+        print(f"\n[Training Complete] Model saved to {final_save_path}, {latest_path}, and {final_path}")
         return model
 
     finally:

@@ -17,6 +17,15 @@ from bots.rl.features import compute_estimated_power_ratio
 from bots.shop_manager import JokerRole, get_joker_role
 from bots.state_parser import BlindType, Card, GameScreen, ParsedGameState
 
+FACE_DEPENDENT_PLANT_JOKERS = {
+    "j_scary_face", "j_smiley", "j_photograph", "j_sock_and_buskin",
+    "j_baron", "j_shoot_the_moon", "j_pareidolia", "j_business", "j_reserved_parking",
+}
+ANTI_PLANT_JOKERS = {
+    "j_luchador", "j_supernova", "j_blackboard", "j_card_sharp",
+    "j_constellation", "j_ride_the_bus", "j_odd_todd", "j_blue_joker",
+}
+
 
 def calculate_step_reward(
     prev_state: ParsedGameState | None,
@@ -28,6 +37,7 @@ def calculate_step_reward(
     game_over: bool | None = None,
     score_obtained: int | None = None,
     score_required: int | None = None,
+    rerolls_in_current_shop: int = 0,
 ) -> tuple[float, dict[str, float]]:
     """Compute the macro reward and detailed breakdown for the transition.
 
@@ -57,6 +67,7 @@ def calculate_step_reward(
         "victory_bonus": 0.0,
         "defeat_penalty": 0.0,
         "rich_death_penalty": 0.0,
+        "reroll_reward": 0.0,
         "reroll_penalty": 0.0,
         "power_ratio_shaping": 0.0,
         "emperor_reward": 0.0,
@@ -65,6 +76,8 @@ def calculate_step_reward(
         "celestial_pack_penalty": 0.0,
         "debt_penalty": 0.0,
         "hoarding_penalty": 0.0,
+        "plant_adaptation_reward": 0.0,
+        "legendary_bonus": 0.0,
     }
 
     # 1. Deduce flags if not explicitly passed
@@ -130,9 +143,24 @@ def calculate_step_reward(
             boss_ante_mult = 1.5 if ante >= 6 else 1.0
             breakdown["boss_bonus"] = boss_ante_mult * float(ante)
 
-    # 5. Shop Discipline: penalize REROLL_SHOP to avoid compulsive rerolls
+    # 5. Shop Discipline: Intelligent Reroll shaping
     if action == ActionID.REROLL_SHOP:
-        breakdown["reroll_penalty"] = -0.05
+        money_before = float(prev_state.money) if prev_state else 0.0
+        cost = float(getattr(prev_state, "reroll_cost", 5) or 5)
+        money_after = money_before - cost
+        pr = compute_estimated_power_ratio(prev_state) if prev_state else 0.0
+        max_slots = (prev_state.jokers.limit if prev_state and prev_state.jokers else 5) or 5
+        jokers_count = len(prev_state.jokers.cards) if prev_state and prev_state.jokers else 0
+        has_free_slot = jokers_count < max_slots
+        is_emergency = (prev_state.ante_num >= 5 and pr < 0.0) if prev_state else False
+
+        if money_after >= 25.0 and rerolls_in_current_shop <= 2:
+            if has_free_slot or pr < 0.45:
+                breakdown["reroll_reward"] = 0.04
+            else:
+                breakdown["reroll_reward"] = 0.0
+        elif (money_after < 25.0 and not is_emergency) or rerolls_in_current_shop > 2:
+            breakdown["reroll_penalty"] = -0.08
 
     # 6. The Emperor usage shaping
     if ActionID.USE_OR_SELL_CONSUMABLE_0 <= action <= ActionID.USE_OR_SELL_CONSUMABLE_3:
@@ -248,6 +276,39 @@ def calculate_step_reward(
                 if len(scoring_jokers) < 2:
                     breakdown["celestial_pack_penalty"] = -0.15
 
+    # 8.B Plant Boss adaptation (penalize face-dependent jokers, boost counters/face-independent scalers)
+    if prev_state and prev_state.is_plant_boss_announced:
+        candidate_card = None
+        if ActionID.BUY_SHOP_CARD_0 <= action <= ActionID.BUY_SHOP_CARD_3:
+            idx = action - ActionID.BUY_SHOP_CARD_0
+            if prev_state.shop and idx < len(prev_state.shop.cards):
+                candidate_card = prev_state.shop.cards[idx]
+        elif ActionID.SELECT_PACK_CARD_0 <= action <= ActionID.SELECT_PACK_CARD_4:
+            idx = action - ActionID.SELECT_PACK_CARD_0
+            if prev_state.pack and idx < len(prev_state.pack.cards):
+                candidate_card = prev_state.pack.cards[idx]
+
+        if candidate_card:
+            card_key = (candidate_card.key or "").lower()
+            if card_key in FACE_DEPENDENT_PLANT_JOKERS:
+                breakdown["plant_adaptation_reward"] = -0.25
+            elif card_key in ANTI_PLANT_JOKERS:
+                breakdown["plant_adaptation_reward"] = 0.20
+
+    # 8.C Legendary Consumable bonus (+0.40 for c_soul or c_black_hole)
+    if ActionID.USE_OR_SELL_CONSUMABLE_0 <= action <= ActionID.USE_OR_SELL_CONSUMABLE_3:
+        idx = action - ActionID.USE_OR_SELL_CONSUMABLE_0
+        if prev_state and prev_state.consumables and idx < len(prev_state.consumables.cards):
+            card_k = (prev_state.consumables.cards[idx].key or "").lower()
+            if card_k in ("c_soul", "c_black_hole"):
+                breakdown["legendary_bonus"] = 0.40
+    elif ActionID.SELECT_PACK_CARD_0 <= action <= ActionID.SELECT_PACK_CARD_4:
+        idx = action - ActionID.SELECT_PACK_CARD_0
+        if prev_state and prev_state.pack and idx < len(prev_state.pack.cards):
+            card_k = (prev_state.pack.cards[idx].key or "").lower()
+            if card_k in ("c_soul", "c_black_hole"):
+                breakdown["legendary_bonus"] = 0.40
+
     # 9. Credit Card debt penalty when leaving shop
     if action == ActionID.LEAVE_SHOP:
         money = next_state.money if next_state else (prev_state.money if prev_state else 0)
@@ -260,13 +321,13 @@ def calculate_step_reward(
         jokers = (prev_state.jokers.cards if prev_state and prev_state.jokers else []) or (next_state.jokers.cards if next_state and next_state.jokers else [])
         has_bull_or_bootstraps = any(j.key in ("j_bull", "j_bootstraps") and not j.state.debuff for j in jokers)
         money = prev_state.money if prev_state else next_state.money
-        if not has_bull_or_bootstraps and money > 45:
+        if not has_bull_or_bootstraps and money > 40:
             st = prev_state or next_state
             pr = compute_estimated_power_ratio(st) if st else 1.0
             max_slots = (st.jokers.limit if st and st.jokers else 5) or 5
             has_free_slot = len(jokers) < max_slots
-            if pr < 0.35 or has_free_slot:
-                breakdown["hoarding_penalty"] = -0.15
+            if rerolls_in_current_shop == 0 and (has_free_slot or pr < 0.40):
+                breakdown["hoarding_penalty"] = -0.20
 
     # 11. Power ratio shaping (only during active play, not on terminal step)
     if prev_state and not is_game_over and not is_game_won:

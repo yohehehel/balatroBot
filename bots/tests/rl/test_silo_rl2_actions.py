@@ -635,3 +635,66 @@ def test_emperor_and_hermit_masking() -> None:
     assert compute_action_mask(state_buy_ok)[ActionID.BUY_SHOP_CARD_0]
 
 
+def test_soul_auto_sells_weakest_joker_on_full_slots():
+    """Verify selecting/using The Soul at 5/5 jokers auto-sells the weakest non-eternal joker first."""
+    client = MockBalatroClient()
+    soul = _make_card("c_soul", set_name="Spectral")
+
+    # 5 jokers: 4 strong, 1 weak (j_joker with no mult)
+    jokers = [
+        _make_card("j_blueprint", set_name="Joker"),
+        _make_card("j_brainstorm", set_name="Joker"),
+        _make_card("j_cavendish", set_name="Joker"),
+        _make_card("j_constellation", set_name="Joker"),
+        _make_card("j_joker", set_name="Joker"),  # Weakest at index 4
+    ]
+
+    state = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(count=1, limit=1, cards=[soul]),
+        jokers=AreaInfo(count=5, limit=5, cards=jokers),
+    )
+
+    execute_macro_action(ActionID.SELECT_PACK_CARD_0, state, client)
+
+    # Must first sell the weakest joker (index 4), then select the pack card
+    assert len(client.calls) >= 2
+    assert client.calls[0] == ("sell", {"joker": 4})
+    assert client.calls[1] == ("pack", {"card": 0})
+
+
+def test_judgement_and_wraith_masking_at_full_jokers():
+    """Verify Judgement and Wraith are masked False when joker slots are full."""
+    judgement = _make_card("c_judgement", set_name="Tarot")
+    wraith = _make_card("c_wraith", set_name="Spectral")
+    jokers = [_make_card(f"j_joker_{i}", set_name="Joker") for i in range(5)]
+
+    # In open booster pack
+    state_pack = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        pack=AreaInfo(count=2, limit=2, cards=[judgement, wraith]),
+        jokers=AreaInfo(count=5, limit=5, cards=jokers),
+    )
+    mask = compute_action_mask(state_pack)
+    assert not mask[ActionID.SELECT_PACK_CARD_0]
+    assert not mask[ActionID.SELECT_PACK_CARD_1]
+
+
+def test_pareidolia_masked_when_plant_announced():
+    """Verify Pareidolia is masked False in shop when The Plant boss is announced."""
+    pareidolia = _make_card("j_pareidolia", set_name="Joker")
+    pareidolia.cost.buy = 5
+    plant_blind = BlindInfo(type="BOSS", status="SELECT", name="The Plant", effect="Debuff all face cards", score=1000)
+
+    state = ParsedGameState(
+        state=GameScreen.SHOP,
+        money=20,
+        blinds={"boss": plant_blind},
+        shop=AreaInfo(count=1, limit=1, cards=[pareidolia]),
+        jokers=AreaInfo(count=0, limit=5, cards=[]),
+    )
+    mask = compute_action_mask(state)
+    assert not mask[ActionID.BUY_SHOP_CARD_0]
+
+
+

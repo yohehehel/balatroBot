@@ -452,6 +452,30 @@ def _is_ox_active(state: ParsedGameState) -> bool:
     return "ox" in bname or "ox" in bkey
 
 
+def _is_pillar_active(state: ParsedGameState) -> bool:
+    """Return True if The Pillar boss blind is active and not disabled."""
+    if not _is_boss_active(state):
+        return False
+    b = state.active_blind
+    if not b:
+        return False
+    bname = (b.name or "").lower()
+    bkey = (getattr(b, "key", None) or "").lower()
+    return "pillar" in bname or "pillar" in bkey
+
+
+def _is_plant_active(state: ParsedGameState) -> bool:
+    """Return True if The Plant boss blind is active and not disabled."""
+    if not _is_boss_active(state):
+        return False
+    b = state.active_blind
+    if not b:
+        return False
+    bname = (b.name or "").lower()
+    bkey = (getattr(b, "key", None) or "").lower()
+    return "plant" in bname or "plant" in bkey
+
+
 def _get_most_played_hand(state: ParsedGameState) -> str | None:
     """Return the name of the most played poker hand this run."""
     if not state.hands:
@@ -1268,6 +1292,7 @@ def select_best_play(state: ParsedGameState) -> HandCandidate | None:
 
     if winning_candidates:
         has_blackboard = "j_blackboard" in jkeys
+        is_pre_pillar = state.is_pillar_boss_announced and (not active_blind or active_blind.type.upper() != "BOSS")
 
         def _winning_sort_key(c: HandCandidate) -> tuple:
             held_is_black = False
@@ -1283,9 +1308,18 @@ def select_best_play(state: ParsedGameState) -> HandCandidate | None:
             card_count_penalty = 0 if held_is_black else len(c.indices)
             is_ox_hand = 1 if (avoid_ox and c.hand_type == most_played_hand) else 0
 
+            # Pillar countermeasure: penalize using Face cards and Aces in Small/Big Blind before Pillar
+            # to preserve them un-debuffed for The Pillar
+            pillar_penalty = (
+                sum(1 for idx in c.indices if hand_cards[idx].value.rank in ("J", "Q", "K", "A"))
+                if is_pre_pillar
+                else 0
+            )
+
             return (
                 is_ox_hand,
                 -int(held_is_black),
+                pillar_penalty,
                 card_count_penalty,
                 -c.conservation_score,
                 -c.score,
@@ -1446,14 +1480,25 @@ def discard_card_priority(card: Card, state: ParsedGameState) -> float:
         else:
             base_priority -= 50.0
 
+    is_plant = _is_plant_active(state)
+    is_pillar = _is_pillar_active(state)
+
     # Face card jokers synergy (Photograph, Smiley Face, Scary Face, Triboulet)
-    has_face_synergy = any(k in jkeys for k in ("j_photograph", "j_smiley", "j_scary_face", "j_triboulet"))
+    # Disabled when The Plant is active (since all face cards are debuffed)
+    has_face_synergy = (not is_plant) and any(k in jkeys for k in ("j_photograph", "j_smiley", "j_scary_face", "j_triboulet"))
     if has_face_synergy:
         is_face = _is_face_card(card, "j_pareidolia" in jkeys)
         if not is_face:
             base_priority += 40.0
         else:
             base_priority -= 30.0
+
+    # The Plant countermeasure: mass discard debuffed face cards, unless protected by Blackboard (Spades/Clubs)
+    if is_plant and _is_face_card(card, "j_pareidolia" in jkeys):
+        if "j_blackboard" in jkeys and suit in ("S", "C"):
+            pass  # Preserve black face cards for Blackboard x3 Mult in hand
+        else:
+            base_priority += 400.0
 
     # Rank protection synergies (Wee Joker, Hack, Fibonacci)
     if "j_wee" in jkeys and rank == "2":
@@ -1467,6 +1512,10 @@ def discard_card_priority(card: Card, state: ParsedGameState) -> float:
     debuffed_suits = get_debuffed_suits(state)
     if card.state.debuff or (suit in debuffed_suits):
         base_priority += 100.0
+
+    # The Pillar countermeasure: absolute priority (+500.0) to discard cards already debuffed by Pillar
+    if is_pillar and card.state.debuff:
+        base_priority += 500.0
 
     # Lower rank cards have less chip value -> prefer discarding them
     # Rank order: 2 (lowest) gives +13, Ace (highest) gives +1
@@ -1521,8 +1570,16 @@ def add_kickers_for_recycle(
     candidate: HandCandidate,
 ) -> list[int]:
     """Add up to 5 cards (candidate scoring + weak kickers) to cycle hand when no discards remain."""
-    hand_cards = state.hand.cards
     current_indices = list(candidate.indices)
+
+    # Pillar countermeasure: during Small / Big Blind before Pillar, do NOT add extra kickers
+    # to avoid burning and permanently debuffing cards for The Pillar!
+    active_b = state.active_blind
+    is_pre_pillar = state.is_pillar_boss_announced and (not active_b or active_b.type.upper() != "BOSS")
+    if is_pre_pillar:
+        return sorted(current_indices)
+
+    hand_cards = state.hand.cards
     current_set = set(current_indices)
 
     available_indices = [i for i in range(len(hand_cards)) if i not in current_set]

@@ -10,6 +10,7 @@ from __future__ import annotations
 from enum import IntEnum
 import logging
 from typing import Any
+import time
 
 import gymnasium
 import httpx
@@ -26,7 +27,7 @@ from bots.shop_manager import (
     get_interest_cap,
     get_protected_interest_floor,
 )
-from bots.state_parser import Card, GameScreen, ParsedGameState
+from bots.state_parser import Card, GameScreen, ParsedGameState, generate_random_seed
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,40 @@ def _get_vendable_jokers(state: ParsedGameState) -> list[Card]:
         vendable.sort(key=lambda j: (evaluate_joker_value(j, state), j.cost.sell))
         return vendable[:5]
     return vendable
+
+
+def _can_sell_any_joker_for_soul(state: ParsedGameState) -> bool:
+    """Return True if at least one owned Joker can be sold to free a slot for The Soul."""
+    if not state.jokers or not state.jokers.cards:
+        return False
+    vendable = [j for j in state.jokers.cards if not j.modifier.eternal]
+    if not vendable:
+        return False
+    # If all vendable jokers are untouchable Tier S / Legendary (score >= 95.0, e.g. Blueprint, Brainstorm)
+    all_untouchable = all(evaluate_joker_value(j, state) >= 95.0 for j in vendable)
+    return not all_untouchable
+
+
+def _sell_weakest_joker_for_soul(state: ParsedGameState, client: BalatroClient) -> bool:
+    """Automatically sell the lowest-utility non-eternal Joker to make room for The Soul."""
+    if not state.jokers or not state.jokers.cards:
+        return False
+    vendable = [j for j in state.jokers.cards if not j.modifier.eternal]
+    if not vendable:
+        return False
+    vendable.sort(key=lambda j: (evaluate_joker_value(j, state), j.cost.sell))
+    weakest = vendable[0]
+    real_idx = state.jokers.cards.index(weakest)
+    try:
+        client.call("sell", {"joker": real_idx})
+        logger.info(
+            f"[Auto-Sell] Sold weakest joker {weakest.key} (score {evaluate_joker_value(weakest, state):.1f}) "
+            f"at index {real_idx} to free slot for The Soul"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"[Auto-Sell] Failed to sell weakest joker for The Soul: {e}")
+        return False
 
 
 def _has_strategic_reason_to_sell(joker: Card, state: ParsedGameState) -> bool:
@@ -224,6 +259,8 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
             is_negative = (c.modifier.edition or "").upper() in ("NEGATIVE", "E_NEGATIVE")
 
             if is_joker:
+                if c_key == "j_pareidolia" and state.is_plant_boss_announced:
+                    continue
                 if len(jokers) < max_joker_slots or is_negative:
                     mask[ActionID.BUY_SHOP_CARD_0 + i] = True
             elif is_consumable:
@@ -300,8 +337,13 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
                 elif key == "c_wraith" and spendable <= 4 and len(jokers) < max_joker_slots:
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
-                elif key == "c_soul" and len(jokers) < max_joker_slots:
+                elif key == "c_judgement" and len(jokers) < max_joker_slots:
                     mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
+                elif key == "c_soul":
+                    if len(jokers) < max_joker_slots or _can_sell_any_joker_for_soul(state):
+                        mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
+                    elif len(consumables) >= max_consumable_slots:
+                        mask[ActionID.USE_OR_SELL_CONSUMABLE_0 + i] = True
                 else:
                     # If slots are full, allow selling blocked consumable
                     if len(consumables) >= max_consumable_slots:
@@ -361,6 +403,9 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                     continue
                 if key == "c_judgement" and len(jokers) >= max_joker_slots:
                     continue
+                if key == "c_soul":
+                    if len(jokers) >= max_joker_slots and not _can_sell_any_joker_for_soul(state):
+                        continue
                 if key == "c_fool" and (not _can_use_fool(state) or len(consumables) >= max_consumable_slots):
                     continue
                 mask[ActionID.SELECT_PACK_CARD_0 + i] = True
@@ -389,6 +434,8 @@ def compute_action_mask(state: ParsedGameState) -> np.ndarray:
                 if ckey in ("c_ankh", "c_hex", "c_ectoplasm") and len(jokers) == 0:
                     continue
                 if ckey in ("c_judgement", "c_wraith") and len(jokers) >= max_joker_slots:
+                    continue
+                if ckey == "c_soul" and len(jokers) >= max_joker_slots and not _can_sell_any_joker_for_soul(state):
                     continue
                 if ckey == "c_hermit" and state.money <= 3:
                     continue
@@ -465,7 +512,7 @@ def execute_macro_action(
         if action == ActionID.PLAY_BLIND:
             if state.state == GameScreen.MENU:
                 rpc_method = "start"
-                rpc_params = {"deck": "RED", "stake": "WHITE"}
+                rpc_params = {"deck": "RED", "stake": "WHITE", "seed": generate_random_seed()}
                 client.call("start", rpc_params)
             elif state.state in GameScreen.BOOSTER_STATES:
                 # Fallback if booster is open
@@ -602,6 +649,12 @@ def execute_macro_action(
                     rpc_params = {"skip": True}
                     client.call("pack", rpc_params)
                 else:
+                    if selected_card and selected_card.key.lower() == "c_soul":
+                        max_j = state.jokers.limit or 5
+                        j_cards = state.jokers.cards if state.jokers else []
+                        if len(j_cards) >= max_j:
+                            _sell_weakest_joker_for_soul(state, client)
+
                     rpc_method = "pack"
                     if selected_card and selected_card.key.lower() not in ZERO_TARGET_CONSUMABLES and state.hand.cards:
                         targets = select_targets_for_consumable(selected_card, state.hand.cards, state)
@@ -661,6 +714,12 @@ def execute_macro_action(
                 rpc_method = "noop"
             else:
                 # Use consumable
+                if consumable and consumable.key.lower() == "c_soul":
+                    max_j = state.jokers.limit or 5
+                    j_cards = state.jokers.cards if state.jokers else []
+                    if len(j_cards) >= max_j:
+                        _sell_weakest_joker_for_soul(state, client)
+
                 rpc_method = "use"
                 if consumable:
                     key = consumable.key or ""

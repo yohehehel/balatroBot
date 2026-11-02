@@ -135,21 +135,20 @@ return {
 
     -- Start the run with stake number and optional seed
     local run_params = { stake = stake_number }
-    if args.seed then
-      run_params.seed = args.seed
+    if args.seed and tostring(args.seed):match("%S") then
+      run_params.seed = string.upper(tostring(args.seed))
     else
-      -- Headless/bot runs have stationary mouse cursors. Balatro's generate_starting_seed()
-      -- hashes G.CONTROLLER.cursor_hover.T and time. Randomize them using socket.gettime()
-      -- so every unseeded automated run gets a completely fresh, unique seed.
-      if G.CONTROLLER and G.CONTROLLER.cursor_hover then
-        local ok, socket = pcall(require, "socket")
-        local t = (ok and socket and socket.gettime and socket.gettime()) or os.clock()
-        G.CONTROLLER.cursor_hover.time = t
-        if G.CONTROLLER.cursor_hover.T then
-          G.CONTROLLER.cursor_hover.T.x = math.random() * 1000
-          G.CONTROLLER.cursor_hover.T.y = math.random() * 1000
-        end
+      -- Headless/bot runs: Generate an 8-character Balatro seed with reseeded PRNG
+      local chars = "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
+      local random_seed = ""
+      local ok, socket = pcall(require, "socket")
+      local t = (ok and socket and socket.gettime and socket.gettime()) or os.clock()
+      math.randomseed(math.floor(os.time() + (t % 1) * 1000000))
+      for _ = 1, 8 do
+        local rand_idx = math.random(1, #chars)
+        random_seed = random_seed .. chars:sub(rand_idx, rand_idx)
       end
+      run_params.seed = random_seed
     end
 
     sendDebugMessage(

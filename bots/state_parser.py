@@ -9,6 +9,7 @@ Responsibilities:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import random
 from typing import Any
 
 from bots.client_wrapper import BalatroClient
@@ -183,6 +184,40 @@ class ParsedGameState:
             if blind.status in (BlindStatus.SELECT, BlindStatus.CURRENT):
                 return blind
         return None
+
+    @property
+    def boss_blind(self) -> BlindInfo | None:
+        """Return the Boss Blind for the current Ante."""
+        if not self.blinds:
+            return None
+        return self.blinds.get("boss")
+
+    @property
+    def is_plant_boss_announced(self) -> bool:
+        """Return True if the Boss Blind of the current Ante is The Plant."""
+        b = self.boss_blind or self.active_blind
+        if b:
+            effect = (b.effect or "").lower()
+            name = (b.name or "").lower()
+            if "bl_plant" in effect or "plant" in name:
+                return True
+        return False
+
+    @property
+    def is_pillar_boss_announced(self) -> bool:
+        """Return True if the Boss Blind of the current Ante is The Pillar."""
+        b = self.boss_blind or self.active_blind
+        if b:
+            effect = (b.effect or "").lower()
+            name = (b.name or "").lower()
+            if "bl_pillar" in effect or "pillar" in name:
+                return True
+        return False
+
+    @property
+    def reroll_cost(self) -> int:
+        """Return the current reroll cost from round info, defaulting to 5."""
+        return self.round.reroll_cost if self.round else 5
 
 
 def _normalize_edition(raw_edition: Any) -> str | None:
@@ -361,6 +396,16 @@ def fetch_gamestate(client: BalatroClient) -> ParsedGameState:
     return parse_gamestate(raw)
 
 
+# Characters used by Balatro for random seeds:
+# 34 uppercase alphanumeric characters excluding '0' and 'O' to match Balatro's canonical representation
+BALATRO_SEED_CHARS = "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
+
+
+def generate_random_seed(length: int = 8) -> str:
+    """Generate a random 8-character Balatro-compatible seed."""
+    return "".join(random.choices(BALATRO_SEED_CHARS, k=length))
+
+
 def start_run(
     client: BalatroClient,
     deck: str = "RED",
@@ -372,13 +417,13 @@ def start_run(
     Always sends ``menu`` first to ensure the menu is fully initialised
     (required by the Lua ``start`` endpoint), then ``start`` with the
     requested deck / stake / seed.
+    If seed is None or empty, generates a unique 8-character Balatro seed.
     """
     # Always call menu to ensure full initialisation (mirrors upstream fixtures)
     client.call("menu")
 
-    params: dict[str, Any] = {"deck": deck, "stake": stake}
-    if seed:
-        params["seed"] = seed
+    actual_seed = seed.strip().upper() if seed and seed.strip() else generate_random_seed()
+    params: dict[str, Any] = {"deck": deck, "stake": stake, "seed": actual_seed}
 
     raw = client.call("start", params)
     return parse_gamestate(raw)

@@ -13,6 +13,8 @@ from bots.state_parser import (
     Card,
     GameScreen,
     ParsedGameState,
+    BALATRO_SEED_CHARS,
+    generate_random_seed,
     fetch_gamestate,
     navigate_to_combat,
     parse_gamestate,
@@ -21,6 +23,7 @@ from bots.state_parser import (
 )
 
 __all__ = [
+    "BALATRO_SEED_CHARS",
     "BalatroClient",
     "Card",
     "ClientConfig",
@@ -32,6 +35,7 @@ __all__ = [
     "calculate_hand_score",
     "evaluate_all_plays",
     "fetch_gamestate",
+    "generate_random_seed",
     "identify_poker_hand",
     "navigate_to_combat",
     "parse_gamestate",

@@ -35,6 +35,7 @@ from bots.state_parser import (
     GameScreen,
     ParsedGameState,
     fetch_gamestate,
+    generate_random_seed,
     parse_gamestate,
     start_run,
 )
@@ -92,6 +93,7 @@ class BalatroMacroEnv(gymnasium.Env):
         self.max_consecutive_actions_per_state = max_consecutive_actions_per_state
         self.endless = endless
         self.won_flag: bool = False
+        self.current_run_seed: str | None = None
 
         self.action_space = get_action_space()
         self.observation_space = get_observation_space()
@@ -127,6 +129,11 @@ class BalatroMacroEnv(gymnasium.Env):
         self.run_max_ante: int = 1
         self.run_total_reward: float = 0.0
 
+        # Shield against repetitive RPC errors (e.g. [-32003])
+        self.banned_actions_current_step: set[int] = set()
+        self._last_state_signature: tuple[Any, ...] | None = None
+        self.rerolls_in_current_shop: int = 0
+
     def _log(self, msg: str) -> None:
         prefix = f"[Inst {self.instance_id}] " if self.instance_id is not None else ""
         try:
@@ -135,9 +142,24 @@ class BalatroMacroEnv(gymnasium.Env):
             clean_msg = msg.encode("ascii", errors="replace").decode("ascii")
             log_message(f"{prefix}{clean_msg}")
 
+    def _get_state_signature(self, state: ParsedGameState) -> tuple[Any, ...]:
+        pack_len = len(state.pack.cards) if state.pack else 0
+        j_len = len(state.jokers.cards) if state.jokers else 0
+        c_len = len(state.consumables.cards) if state.consumables else 0
+        h_len = len(state.hand.cards) if state.hand else 0
+        shop_len = len(state.shop.cards) if state.shop else 0
+        return (state.state, state.ante_num, state.round_num, state.money, pack_len, j_len, c_len, h_len, shop_len)
+
     def action_masks(self) -> np.ndarray:
         """Return the boolean action mask of shape (26,) for the current state."""
-        return compute_action_mask(self.state)
+        mask = compute_action_mask(self.state)
+        for act in self.banned_actions_current_step:
+            mask[act] = False
+        if not np.any(mask):
+            # Fallback if all actions were banned: unban and recompute
+            self.banned_actions_current_step.clear()
+            mask = compute_action_mask(self.state)
+        return mask
 
     def _sleep_delay(self) -> None:
         if self.delay > 0:
@@ -197,18 +219,36 @@ class BalatroMacroEnv(gymnasium.Env):
                 logger.error(msg)
                 raise RuntimeError(msg)
 
-        seed_str = str(seed) if seed is not None else self.seed
         if self.record_telemetry and self.step_count > 0:
             try:
                 self._record_run_telemetry(terminated=False, truncated=True)
             except Exception:
                 pass
 
+        # Determine unique seed for this new run:
+        # 1. Direct string seed passed to reset(seed=...)
+        # 2. Fixed seed specified on BalatroMacroEnv initialization
+        # 3. Seed passed via options dict
+        # 4. Fresh random 8-character Balatro seed (default for all unseeded training/evaluation runs)
+        if isinstance(seed, str) and seed.strip():
+            seed_str = seed.strip().upper()
+        elif self.seed is not None and str(self.seed).strip():
+            seed_str = str(self.seed).strip().upper()
+        elif options and options.get("seed"):
+            seed_str = str(options["seed"]).strip().upper()
+        else:
+            seed_str = generate_random_seed()
+
+        self.current_run_seed = seed_str
+
         self.step_count = 0
         self.consecutive_state_actions = 0
         self.last_seen_state = ""
         self.prev_state = None
         self.won_flag = False
+        self.banned_actions_current_step.clear()
+        self._last_state_signature = None
+        self.rerolls_in_current_shop = 0
 
         self.run_start_time = time.time()
         self.run_hands_breakdown = Counter()
@@ -252,7 +292,8 @@ class BalatroMacroEnv(gymnasium.Env):
                 self.state = ParsedGameState()
 
         self.state = self._poll_stable_state()
-        self._log(f"-- Fresh run started (Deck: {self.deck}, Stake: {self.stake}, Seed: {seed_str or 'RANDOM'}) --")
+        active_seed = self.state.seed or self.current_run_seed or seed_str
+        self._log(f"-- Fresh run started (Deck: {self.deck}, Stake: {self.stake}, Seed: {active_seed}) --")
         obs = extract_features(self.state)
         info = {
             "state": self.state.state,
@@ -377,9 +418,10 @@ class BalatroMacroEnv(gymnasium.Env):
         outcome = outcome_override if outcome_override else ("WON" if round_won else "LOST")
         jokers_str = "|".join(c.key for c in self.state.jokers.cards) if self.state.jokers else ""
         blind_name = self.state.active_blind.name if self.state.active_blind else "Blind"
+        run_seed = self.state.seed or self.current_run_seed or (str(self.seed) if self.seed else "RANDOM")
         record = RoundRecord(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            seed=self.state.seed or str(self.seed or "RANDOM"),
+            seed=run_seed,
             ante=self.state.ante_num,
             round_num=self.state.round_num,
             blind_name=blind_name,
@@ -423,10 +465,11 @@ class BalatroMacroEnv(gymnasium.Env):
         jokers_str = "|".join(c.key for c in self.state.jokers.cards) if self.state.jokers else ""
         fatal_boss = (self.state.active_blind.name if (is_game_over and self.state.active_blind) else ("NONE" if is_game_won else "Small Blind"))
         breakdown_str = "|".join(f"{k}:{v}" for k, v in self.run_hands_breakdown.items())
+        run_seed = self.state.seed or self.current_run_seed or (str(self.seed) if self.seed else "RANDOM")
 
         rec = RunRecord(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            seed=self.state.seed or str(self.seed or "RANDOM"),
+            seed=run_seed,
             deck=self.deck,
             stake=self.stake,
             win=is_game_won,
@@ -491,6 +534,15 @@ class BalatroMacroEnv(gymnasium.Env):
         if fresh_state.state != "UNKNOWN":
             self.state = fresh_state
 
+        # Track rerolls in current shop: reset if not in SHOP
+        if self.state.state != GameScreen.SHOP:
+            self.rerolls_in_current_shop = 0
+
+        curr_sig = self._get_state_signature(self.state)
+        if self._last_state_signature is not None and curr_sig != self._last_state_signature:
+            self.banned_actions_current_step.clear()
+        self._last_state_signature = curr_sig
+
         mask = self.action_masks()
 
         action_int = int(action)
@@ -536,8 +588,10 @@ class BalatroMacroEnv(gymnasium.Env):
                     self._log(f"  [ERROR] Instance transport failure: {exec_info.get('error')}")
                     self.is_disconnected = True
             else:
-                # If an RPC logical error occurred (e.g. action rejected because screen transitioned),
-                # sleep briefly to allow the game engine to settle before the next observation
+                # Dynamic shield against repetitive RPC errors (e.g. [-32003])
+                err = str(exec_info.get("error", ""))
+                self.banned_actions_current_step.add(action_int)
+                self._log(f"  [Shield] Action {act_enum.name} ({action_int}) failed with RPC error ({err}); banned for current state")
                 if isinstance(self.client, BalatroClient):
                     time.sleep(0.1)
 
@@ -545,10 +599,11 @@ class BalatroMacroEnv(gymnasium.Env):
         tx = exec_info.get("transaction")
         if tx and self.record_telemetry:
             try:
+                run_seed = self.state.seed or self.current_run_seed or (str(self.seed) if self.seed else "RANDOM")
                 record_purchase(PurchaseRecord(
                     timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     worker_id=self.instance_id or 0,
-                    seed=self.state.seed or str(self.seed or "RANDOM"),
+                    seed=run_seed,
                     ante=self.state.ante_num,
                     round_num=self.state.round_num,
                     money=self.state.money,
@@ -656,7 +711,10 @@ class BalatroMacroEnv(gymnasium.Env):
             game_over=is_game_over,
             score_obtained=score_obtained,
             score_required=score_required,
+            rerolls_in_current_shop=self.rerolls_in_current_shop,
         )
+        if action_int == ActionID.LEAVE_SHOP:
+            self.rerolls_in_current_shop = 0
         total_reward = float(reward + invalid_penalty)
         self.run_total_reward += total_reward
 

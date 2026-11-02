@@ -558,3 +558,82 @@ def test_blackboard_purges_red_cards_via_kickers():
     assert all(c.value.suit in ("S", "C") for c in held)
     assert best.score >= 50
 
+
+# ── Test 14: Counter-measures against The Pillar ──────────────────────────
+
+def test_pillar_pre_boss_and_active_rules():
+    """Verify pre-Pillar kickers disable, Face/Ace preservation, and active Pillar debuff discard priority."""
+    from bots.combat_solver import add_kickers_for_recycle
+
+    pillar_boss = BlindInfo(type="BOSS", status="UPCOMING", name="The Pillar", effect="bl_pillar", score=1000)
+    small_blind = BlindInfo(type="SMALL", status="CURRENT", name="Small Blind", effect="", score=1000)
+
+    cards = [
+        _make_card("2", "S", 1),
+        _make_card("2", "C", 2),
+        _make_card("K", "H", 3),
+        _make_card("A", "D", 4),
+        _make_card("5", "S", 5),
+    ]
+
+    # Pre-Pillar state (Small blind active, Pillar announced as boss)
+    state_pre = _make_combat_state(
+        hand_cards=cards,
+        discards_left=0,
+        hands_left=2,
+        blind_score=20,
+    )
+    state_pre.blinds = {"small": small_blind, "boss": pillar_boss}
+
+    best = select_best_play(state_pre)
+    assert best is not None
+    # 1. add_kickers_for_recycle should NOT add extra kickers in pre-Pillar
+    recycle_indices = add_kickers_for_recycle(state_pre, best)
+    assert len(recycle_indices) == len(best.indices)
+
+    # 2. When The Pillar is active, debuffed card has +500.0 priority
+    debuffed_card = _make_card("K", "H", 1, debuff=True)
+    state_active_pillar = _make_combat_state(
+        hand_cards=[debuffed_card],
+        blind_name="The Pillar",
+        blind_effect="bl_pillar",
+        blind_type="BOSS",
+    )
+    prio = discard_card_priority(debuffed_card, state_active_pillar)
+    # Debuff base +100, Pillar debuff +500 -> > 500
+    assert prio >= 600.0
+
+
+# ── Test 15: Counter-measures against The Plant ───────────────────────────
+
+def test_plant_face_card_purge_and_blackboard_exception():
+    """Verify The Plant forces face cards discard (+400), unless Blackboard protects black face cards."""
+    king_hearts = _make_card("K", "H", 1)
+    king_spades = _make_card("K", "S", 2)
+    photo_joker = _make_joker("j_photograph")
+    bb_joker = _make_joker("j_blackboard")
+
+    # Active Plant without Blackboard: King of Hearts gets +400.0
+    state_plant = _make_combat_state(
+        hand_cards=[king_hearts],
+        jokers=[photo_joker],
+        blind_name="The Plant",
+        blind_effect="bl_plant",
+        blind_type="BOSS",
+    )
+    prio_red = discard_card_priority(king_hearts, state_plant)
+    assert prio_red >= 400.0
+
+    # Active Plant WITH Blackboard: King of Spades is preserved (Blackboard synergy)
+    state_plant_bb = _make_combat_state(
+        hand_cards=[king_spades],
+        jokers=[bb_joker],
+        blind_name="The Plant",
+        blind_effect="bl_plant",
+        blind_type="BOSS",
+    )
+    prio_black = discard_card_priority(king_spades, state_plant_bb)
+    # Blackboard synergy preserves black cards (negative priority)
+    assert prio_black < 0.0
+
+

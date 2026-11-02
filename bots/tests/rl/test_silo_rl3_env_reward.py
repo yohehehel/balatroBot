@@ -76,6 +76,8 @@ class MockBalatroStateMachine:
             return self.raw_menu
         elif method == "start":
             self.current_screen = "BLIND_SELECT"
+            if params and "seed" in params:
+                self.raw_blind_select["seed"] = params["seed"]
             return self.raw_blind_select
         elif method == "select":
             self.current_screen = "SELECTING_HAND"
@@ -287,16 +289,52 @@ def test_high_ante_progressive_bonus():
     assert r8 > r7 > r6 > r5
 
 
-def test_reroll_shop_penalty():
-    """Verify REROLL_SHOP applies a -0.05 penalty."""
-    state = ParsedGameState(state=GameScreen.SHOP, round_num=2, ante_num=1)
-    reward, breakdown = calculate_step_reward(
-        prev_state=state,
-        action=ActionID.REROLL_SHOP,
-        next_state=state,
+def test_intelligent_reroll_reward_and_penalty():
+    """Verify intelligent reroll grants +0.04 when rich with free slot, and -0.08 when dropping < $25."""
+    # 1. Money = $35, cost = $5 -> $30 >= $25, has free slot (0/5) -> +0.04 bonus
+    state_rich = ParsedGameState(
+        state=GameScreen.SHOP,
+        round_num=2,
+        ante_num=2,
+        money=35,
+        round=RoundInfo(reroll_cost=5),
+        jokers=AreaInfo(cards=[], limit=5),
     )
-    assert breakdown["reroll_penalty"] == -0.05
-    assert reward == -0.05
+    reward_bonus, breakdown_bonus = calculate_step_reward(
+        prev_state=state_rich,
+        action=ActionID.REROLL_SHOP,
+        next_state=state_rich,
+        rerolls_in_current_shop=1,
+    )
+    assert breakdown_bonus["reroll_reward"] == 0.04
+    assert breakdown_bonus["reroll_penalty"] == 0.0
+
+    # 2. Money = $20, cost = $5 -> $15 < $25 (outside emergency) -> -0.08 penalty
+    state_poor = ParsedGameState(
+        state=GameScreen.SHOP,
+        round_num=2,
+        ante_num=2,
+        money=20,
+        round=RoundInfo(reroll_cost=5),
+        jokers=AreaInfo(cards=[], limit=5),
+    )
+    reward_pen, breakdown_pen = calculate_step_reward(
+        prev_state=state_poor,
+        action=ActionID.REROLL_SHOP,
+        next_state=state_poor,
+        rerolls_in_current_shop=1,
+    )
+    assert breakdown_pen["reroll_penalty"] == -0.08
+    assert breakdown_pen["reroll_reward"] == 0.0
+
+    # 3. Excessive rerolls (> 2) -> -0.08 penalty even with money
+    reward_pen3, breakdown_pen3 = calculate_step_reward(
+        prev_state=state_rich,
+        action=ActionID.REROLL_SHOP,
+        next_state=state_rich,
+        rerolls_in_current_shop=3,
+    )
+    assert breakdown_pen3["reroll_penalty"] == -0.08
 
 
 def test_final_victory_bonus():
@@ -447,37 +485,124 @@ def test_credit_card_debt_penalty_on_leave_shop():
 
 
 def test_passive_hoarding_penalty_on_leave_shop():
-    """Verify hoarding penalty applies on LEAVE_SHOP in Ante 3+ when rich (>45$) without Bull/Bootstraps."""
-    # 1. Ante 3, $60, no jokers -> applies -0.15 penalty
+    """Verify hoarding penalty applies on LEAVE_SHOP in Ante 3+ when rich (>40$) with 0 rerolls without Bull/Bootstraps."""
+    # 1. Ante 3, $50, 0 rerolls, no jokers -> applies -0.20 penalty
     prev_hoard = ParsedGameState(
         state=GameScreen.SHOP,
         ante_num=3,
-        money=60,
+        money=50,
         jokers=AreaInfo(cards=[], limit=5),
     )
-    next_s = ParsedGameState(state=GameScreen.BLIND_SELECT, ante_num=3, money=60)
-    r1, bd1 = calculate_step_reward(prev_state=prev_hoard, action=ActionID.LEAVE_SHOP, next_state=next_s)
-    assert bd1["hoarding_penalty"] == -0.15
+    next_s = ParsedGameState(state=GameScreen.BLIND_SELECT, ante_num=3, money=50)
+    r1, bd1 = calculate_step_reward(prev_state=prev_hoard, action=ActionID.LEAVE_SHOP, next_state=next_s, rerolls_in_current_shop=0)
+    assert bd1["hoarding_penalty"] == -0.20
 
-    # 2. Ante 3, $60, but owns Bull (j_bull) -> exempt (0.0)
+    # If rerolls were done (rerolls > 0) -> exempt (0.0)
+    r1b, bd1b = calculate_step_reward(prev_state=prev_hoard, action=ActionID.LEAVE_SHOP, next_state=next_s, rerolls_in_current_shop=1)
+    assert bd1b["hoarding_penalty"] == 0.0
+
+    # 2. Ante 3, $50, but owns Bull (j_bull) -> exempt (0.0)
     bull = Card(key="j_bull", set="Joker")
     prev_bull = ParsedGameState(
         state=GameScreen.SHOP,
         ante_num=3,
-        money=60,
+        money=50,
         jokers=AreaInfo(cards=[bull], limit=5),
     )
-    r2, bd2 = calculate_step_reward(prev_state=prev_bull, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    r2, bd2 = calculate_step_reward(prev_state=prev_bull, action=ActionID.LEAVE_SHOP, next_state=next_s, rerolls_in_current_shop=0)
     assert bd2["hoarding_penalty"] == 0.0
 
-    # 3. Ante 2 (Early Ante), $60, no jokers -> exempt (0.0)
+    # 3. Ante 2 (Early Ante), $50, no jokers -> exempt (0.0)
     prev_ante2 = ParsedGameState(
         state=GameScreen.SHOP,
         ante_num=2,
-        money=60,
+        money=50,
         jokers=AreaInfo(cards=[], limit=5),
     )
-    r3, bd3 = calculate_step_reward(prev_state=prev_ante2, action=ActionID.LEAVE_SHOP, next_state=next_s)
+    r3, bd3 = calculate_step_reward(prev_state=prev_ante2, action=ActionID.LEAVE_SHOP, next_state=next_s, rerolls_in_current_shop=0)
     assert bd3["hoarding_penalty"] == 0.0
+
+
+def test_plant_boss_reward_adaptation():
+    """Verify buying face-dependent jokers is penalized (-0.25) and counter jokers boosted (+0.20) against The Plant."""
+    # When The Plant is announced
+    plant_blind = BlindInfo(type="BOSS", status="SELECT", name="The Plant", effect="Debuff all face cards", score=1000)
+    scary_face = Card(key="j_scary_face", set="Joker")
+    supernova = Card(key="j_supernova", set="Joker")
+    
+    prev_plant_scary = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=4,
+        blinds={"boss": plant_blind},
+        shop=AreaInfo(cards=[scary_face]),
+    )
+    next_s = ParsedGameState(state=GameScreen.SHOP, ante_num=4)
+    _, bd_pen = calculate_step_reward(prev_state=prev_plant_scary, action=ActionID.BUY_SHOP_CARD_0, next_state=next_s)
+    assert bd_pen["plant_adaptation_reward"] == -0.25
+
+    prev_plant_super = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=4,
+        blinds={"boss": plant_blind},
+        shop=AreaInfo(cards=[supernova]),
+    )
+    _, bd_bon = calculate_step_reward(prev_state=prev_plant_super, action=ActionID.BUY_SHOP_CARD_0, next_state=next_s)
+    assert bd_bon["plant_adaptation_reward"] == 0.20
+
+
+def test_legendary_consumable_bonus():
+    """Verify +0.40 bonus is awarded on using c_soul or c_black_hole."""
+    soul_card = Card(key="c_soul", set="Spectral")
+    prev_s = ParsedGameState(
+        state=GameScreen.SHOP,
+        ante_num=3,
+        consumables=AreaInfo(cards=[soul_card], limit=2),
+    )
+    next_s = ParsedGameState(state=GameScreen.SHOP, ante_num=3)
+    _, bd = calculate_step_reward(prev_state=prev_s, action=ActionID.USE_OR_SELL_CONSUMABLE_0, next_state=next_s)
+    assert bd["legendary_bonus"] == 0.40
+
+    # In pack selection
+    prev_pack = ParsedGameState(
+        state=GameScreen.BOOSTER_OPENED,
+        ante_num=3,
+        pack=AreaInfo(cards=[soul_card]),
+    )
+    _, bd_pack = calculate_step_reward(prev_state=prev_pack, action=ActionID.SELECT_PACK_CARD_0, next_state=next_s)
+    assert bd_pack["legendary_bonus"] == 0.40
+
+
+def test_rpc_shield_banned_actions():
+    """Verify BalatroMacroEnv bans action causing non-transport RPC error (-32003) and clears on state change."""
+    class FlakyClient:
+        def __init__(self):
+            self.calls = []
+            self.fail_action = True
+
+        def call(self, method, params=None):
+            self.calls.append((method, params))
+            if self.fail_action and method == "buy":
+                # Simulate RPC execution error -32003
+                raise RuntimeError("RPC execution error [-32003] Card cannot be bought")
+            return {
+                "state": "SHOP",
+                "round": 1,
+                "ante": 1,
+                "money": 10,
+                "shop": {"cards": [{"key": "j_joker", "cost": 4}]},
+            }
+
+    client = FlakyClient()
+    env = BalatroMacroEnv(client=client)
+    obs, info = env.reset()
+
+    # Step on BUY_SHOP_CARD_0 which fails with -32003
+    obs, rew, term, trunc, info = env.step(int(ActionID.BUY_SHOP_CARD_0))
+    # It should be added to banned_actions_current_step
+    assert int(ActionID.BUY_SHOP_CARD_0) in env.banned_actions_current_step
+    # And action_masks() must mask it to False
+    mask = env.action_masks()
+    assert mask[int(ActionID.BUY_SHOP_CARD_0)] == False
+
 
 

@@ -97,6 +97,7 @@ def run_rl_episode(
     stake: str = "WHITE",
     csv_path: str | Path | None = None,
     temperature: float | None = None,
+    deterministic: bool = True,
 ) -> dict[str, Any]:
     """Execute a single complete game run driven by the trained RL agent."""
     env = BalatroMacroEnv(
@@ -139,24 +140,8 @@ def run_rl_episode(
             else:
                 action = int(np.argmax(mask))
         else:
-            obs_th, _ = model.policy.obs_to_tensor(obs)
-            dist = model.policy.get_distribution(obs_th)
-            dist.apply_masking(mask)
-            probs = dist.distribution.probs[0].detach().cpu().numpy()
-            action = int(np.argmax(probs))
-
-            # Smart Greedy in SHOP:
-            # If deterministic argmax selects LEAVE_SHOP, but probability of LEAVE_SHOP is < 0.45
-            # (i.e. model wants to stay/buy in shop at > 55% cumulative probability) AND money > $30,
-            # choose best active shop action (argmax among valid actions excluding LEAVE_SHOP).
-            if env.state.state == GameScreen.SHOP and action == ActionID.LEAVE_SHOP:
-                leave_prob = float(probs[ActionID.LEAVE_SHOP])
-                if leave_prob < 0.45 and env.state.money > 30:
-                    valid_active = [a for a in range(len(probs)) if mask[a] and a != ActionID.LEAVE_SHOP]
-                    if valid_active:
-                        best_active = max(valid_active, key=lambda a: probs[a])
-                        if probs[best_active] > 0.0:
-                            action = int(best_active)
+            action, _ = model.predict(obs, action_masks=mask, deterministic=deterministic)
+            action = int(action)
 
         obs, reward, terminated, truncated, info = env.step(action)
 
@@ -179,9 +164,10 @@ def run_rl_episode(
 
     # Log record to CSV
     target_csv = csv_path or DEFAULT_CSV_PATH
+    run_seed = seed or env.state.seed or env.current_run_seed or "RANDOM"
     record = RunRecord(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        seed=seed or "RANDOM",
+        seed=run_seed,
         deck=deck,
         stake=stake,
         win=win,
@@ -200,6 +186,7 @@ def run_rl_episode(
     record_run(record, csv_path=target_csv)
 
     result = {
+        "seed": run_seed,
         "win": win,
         "max_ante": max_ante,
         "final_round": env.state.round_num,
@@ -229,6 +216,7 @@ def evaluate_rl_agent(
     headless: bool = True,
     platform: str | None = None,
     temperature: float | None = None,
+    deterministic: bool = True,
 ) -> list[dict[str, Any]]:
     """Run an evaluation session of N runs using the RL agent."""
     pool: InstancePool | None = None
@@ -254,10 +242,11 @@ def evaluate_rl_agent(
 
     try:
         model = load_model(model_path)
+        mode_str = f"Temp: {temperature}" if temperature else ("Deterministic" if deterministic else "Stochastic")
         print(f"\n=======================================================")
         print(f"  STARTING RL AGENT EVALUATION ({num_runs} RUN(S))")
         print(f"  Model: {model_path or 'default checkpoint'}")
-        print(f"  Port: {port} | Delay: {delay}s | Endless: {endless} | Temp: {temperature or 'Greedy'}")
+        print(f"  Port: {port} | Delay: {delay}s | Endless: {endless} | Mode: {mode_str}")
         print(f"=======================================================\n")
 
         results: list[dict[str, Any]] = []
@@ -275,12 +264,13 @@ def evaluate_rl_agent(
                 stake=stake,
                 csv_path=csv_path,
                 temperature=temperature,
+                deterministic=deterministic,
             )
             results.append(summary)
 
             status_str = "VICTORY" if summary["win"] else "DEFEAT"
             print(
-                f"-- Run {run_idx}/{num_runs} Finished: {status_str} | "
+                f"-- Run {run_idx}/{num_runs} Finished (Seed: {summary.get('seed', 'N/A')}): {status_str} | "
                 f"Ante {summary['max_ante']} | Round {summary['final_round']} | "
                 f"Money: ${summary['max_money']} | Reward: {summary['total_reward']} | "
                 f"Steps: {summary['steps']} | Duration: {summary['duration_sec']}s --\n"
@@ -325,6 +315,7 @@ def main() -> None:
     parser.add_argument("--endless", action="store_true", help="Continue playing after Ante 8")
     parser.add_argument("--seed", type=str, default=None, help="Seed for runs")
     parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature for action selection (default: None for Greedy)")
+    parser.add_argument("--stochastic", action="store_true", help="Use stochastic sampling instead of deterministic greedy argmax")
     parser.add_argument("--csv-path", type=str, default=None, help="Path to save telemetry CSV")
     parser.add_argument(
         "--platform",
@@ -347,6 +338,7 @@ def main() -> None:
         headless=not args.gui,
         platform=args.platform,
         temperature=args.temperature,
+        deterministic=not args.stochastic,
     )
 
 
